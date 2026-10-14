@@ -18,8 +18,9 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     if settings.env == "prod" and settings.secret_key == "change-me":
         raise RuntimeError("Set a strong SECRET_KEY before running in production")
-    # Dev convenience. For production switch to Alembic migrations (see README).
-    Base.metadata.create_all(bind=engine)
+    # Dev/test convenience. In production use Alembic: alembic upgrade head
+    if settings.env != "prod":
+        Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:  # first admin account comes from .env
         if not db.scalar(select(User).where(User.role == Role.admin)):
             db.add(User(name="Admin", email=settings.admin_email.lower(),

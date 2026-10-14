@@ -23,6 +23,31 @@ uvicorn app.main:app --reload     # API on http://localhost:8000 , Swagger docs 
   SQLite is fine for building screens, but the row locks that prevent double booking only work on PostgreSQL.
 
 The first admin is created from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on startup.
+
+## Migrations (Alembic)
+
+Tables are managed by Alembic. In dev/test (`ENV=dev`, the default), `create_all` still runs at startup so
+you can work without running migrations. In production (`ENV=prod`), only Alembic is used.
+
+```bash
+# Apply all pending migrations (run this before starting the app in production):
+alembic upgrade head
+
+# Create a new migration after changing models:
+alembic revision --autogenerate -m "describe_the_change"
+
+# Roll back the last migration:
+alembic downgrade -1
+
+# See current revision:
+alembic current
+
+# See migration history:
+alembic history
+```
+
+Alembic reads `DATABASE_URL` from app settings (`.env`), so no separate database URL config is needed.
+
 Tests: `pytest` (uses SQLite, no setup needed).
 
 ## Endpoints (full contract is live at /docs - share that with the frontend developer)
