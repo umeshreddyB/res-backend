@@ -12,9 +12,11 @@ from ..core.timeutils import day_range_utc
 from ..db import get_db
 from ..deps import get_current_user, require_admin
 from ..models import (MenuItem, Order, OrderItem, OrderStatus, OrderType, Payment,
-                      PaymentOption, PaymentStatus, Reservation, Role, User)
-from ..schemas import OrderCreated, OrderIn, OrderOut, OrderStatusIn, PaymentInit
+                      PaymentOption, PaymentStatus, Refund, RefundStatus, Reservation, Role, User)
+from ..schemas import (OrderCreated, OrderIn, OrderOut, OrderStatusIn, OrderStatusResult,
+                       PaymentInit, RefundIn, RefundOut)
 from ..services import petpooja, razorpay_service
+from ..services.razorpay_service import to_paise
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 admin_router = APIRouter(prefix="/admin/orders", tags=["admin: orders"], dependencies=[Depends(require_admin)])
@@ -127,7 +129,7 @@ def list_orders(status: Optional[OrderStatus] = None, order_type: Optional[Order
     return db.scalars(q.order_by(Order.id.desc()).limit(limit).offset(offset)).all()
 
 
-@admin_router.patch("/{order_id}/status", response_model=OrderOut)
+@admin_router.patch("/{order_id}/status", response_model=OrderStatusResult)
 def set_order_status(order_id: int, data: OrderStatusIn, db: Session = Depends(get_db)):
     order = db.scalar(select(Order).options(selectinload(Order.items)).where(Order.id == order_id))
     if not order:
@@ -135,8 +137,14 @@ def set_order_status(order_id: int, data: OrderStatusIn, db: Session = Depends(g
     if data.status not in TRANSITIONS[order.status]:
         raise HTTPException(409, f"Cannot move order from {order.status.value} to {data.status.value}")
     order.status = data.status
+    # When cancelling a paid/partially-paid order, flag for the admin to consider a refund
+    refund_rec = False
+    if data.status == OrderStatus.cancelled and order.amount_paid > order.amount_refunded:
+        refund_rec = True
     db.commit()
-    return order
+    out = OrderStatusResult.model_validate(order)
+    out.refund_recommended = refund_rec
+    return out
 
 
 @admin_router.post("/{order_id}/mark-paid", response_model=OrderOut)
@@ -151,3 +159,54 @@ def mark_paid(order_id: int, db: Session = Depends(get_db)):
     order.payment_status = PaymentStatus.paid
     db.commit()
     return order
+
+
+@admin_router.post("/{order_id}/refund", response_model=RefundOut, status_code=201)
+def refund_order(order_id: int, data: RefundIn = RefundIn(), db: Session = Depends(get_db)):
+    """Refund an order (full or partial). Locks the order row to prevent concurrent over-refunding."""
+    order = db.scalar(
+        select(Order).where(Order.id == order_id).with_for_update()
+    )
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    refundable = order.amount_paid - order.amount_refunded
+    if refundable <= 0:
+        raise HTTPException(409, "Nothing to refund")
+
+    amount = data.amount if data.amount is not None else refundable
+    if amount > refundable:
+        raise HTTPException(400, f"Refund amount {amount} exceeds refundable balance {refundable}")
+
+    # Find a paid payment to refund against
+    paid_payments = [p for p in order.payments
+                     if p.status.value == "paid" and p.razorpay_payment_id]
+    if not paid_payments:
+        raise HTTPException(409, "No paid payment record to refund against")
+    payment = paid_payments[0]
+
+    try:
+        rz = razorpay_service.refund_payment(payment.razorpay_payment_id, to_paise(amount))
+    except httpx.HTTPError:
+        db.rollback()
+        raise HTTPException(502, "Payment gateway unavailable. Please try again.")
+
+    refund = Refund(
+        order_id=order.id,
+        razorpay_payment_id=payment.razorpay_payment_id,
+        razorpay_refund_id=rz.get("id"),
+        amount=amount,
+        status=RefundStatus.processed if rz.get("status") == "processed" else RefundStatus.created,
+    )
+    db.add(refund)
+
+    # In mock mode (or instant refunds), update totals immediately
+    if refund.status == RefundStatus.processed:
+        order.amount_refunded += amount
+        if order.amount_refunded >= order.amount_paid:
+            order.payment_status = PaymentStatus.refunded
+        else:
+            order.payment_status = PaymentStatus.partially_refunded
+
+    db.commit()
+    return refund

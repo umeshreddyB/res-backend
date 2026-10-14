@@ -43,6 +43,7 @@ class PaymentStatus(str, enum.Enum):
     unpaid = "unpaid"
     partially_paid = "partially_paid"
     paid = "paid"
+    partially_refunded = "partially_refunded"
     refunded = "refunded"
 
 
@@ -55,6 +56,12 @@ class PaymentOption(str, enum.Enum):
 class PaymentRecordStatus(str, enum.Enum):
     created = "created"
     paid = "paid"
+    failed = "failed"
+
+
+class RefundStatus(str, enum.Enum):
+    created = "created"
+    processed = "processed"
     failed = "failed"
 
 
@@ -134,15 +141,18 @@ class Order(Base):
     payment_status: Mapped[PaymentStatus] = mapped_column(E(PaymentStatus), default=PaymentStatus.unpaid)
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     amount_paid: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    amount_refunded: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     customer_name: Mapped[str] = mapped_column(String(100))
     customer_phone: Mapped[Optional[str]] = mapped_column(String(20))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     pickup_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     reservation_id: Mapped[Optional[int]] = mapped_column(ForeignKey("reservations.id"))
     petpooja_order_id: Mapped[Optional[str]] = mapped_column(String(100))
+    needs_attention: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     payments: Mapped[list["Payment"]] = relationship(back_populates="order")
+    refunds: Mapped[list["Refund"]] = relationship(back_populates="order")
     user: Mapped[User] = relationship()
 
     @property
@@ -175,3 +185,15 @@ class Payment(Base):
     status: Mapped[PaymentRecordStatus] = mapped_column(E(PaymentRecordStatus), default=PaymentRecordStatus.created)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     order: Mapped[Order] = relationship(back_populates="payments")
+
+
+class Refund(Base):
+    __tablename__ = "refunds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    razorpay_payment_id: Mapped[str] = mapped_column(String(100))  # the payment being refunded
+    razorpay_refund_id: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    status: Mapped[RefundStatus] = mapped_column(E(RefundStatus), default=RefundStatus.created)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    order: Mapped[Order] = relationship(back_populates="refunds")

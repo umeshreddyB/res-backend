@@ -131,3 +131,111 @@ def test_pay_at_pickup_goes_straight_to_placed(client):
     # other customers cannot read this order
     other = register_customer(client, "other@example.com")
     assert client.get(f"/orders/{order['id']}", headers=auth(other)).status_code == 404
+
+
+def _create_paid_order(client, admin, cust, item):
+    """Helper: create a full_online order and verify payment so it's paid."""
+    order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 2}],
+                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+    rz_id = order["payment"]["razorpay_order_id"]
+    client.post("/payments/verify", json={"razorpay_order_id": rz_id, "razorpay_payment_id": "pay_r1",
+                                          "razorpay_signature": sign(rz_id, "pay_r1")}, headers=auth(cust))
+    return order
+
+
+def test_full_refund(client):
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+    order = _create_paid_order(client, admin, cust, item)
+    oid = order["id"]
+
+    # Full refund (no amount specified)
+    r = client.post(f"/admin/orders/{oid}/refund", headers=auth(admin))
+    assert r.status_code == 201, r.text
+    refund = r.json()
+    assert refund["amount"] == 500.0
+    assert refund["status"] == "processed"  # mock mode
+
+    # Order should be fully refunded
+    got = client.get(f"/orders/{oid}", headers=auth(cust)).json()
+    assert got["payment_status"] == "refunded"
+    assert got["amount_refunded"] == 500.0
+
+    # Cannot refund again
+    r2 = client.post(f"/admin/orders/{oid}/refund", headers=auth(admin))
+    assert r2.status_code == 409
+
+
+def test_partial_refund(client):
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+    order = _create_paid_order(client, admin, cust, item)
+    oid = order["id"]
+
+    # Partial refund of 100
+    r = client.post(f"/admin/orders/{oid}/refund", json={"amount": "100.00"}, headers=auth(admin))
+    assert r.status_code == 201
+    assert r.json()["amount"] == 100.0
+
+    got = client.get(f"/orders/{oid}", headers=auth(cust)).json()
+    assert got["payment_status"] == "partially_refunded"
+    assert got["amount_refunded"] == 100.0
+
+    # Over-refund should fail
+    r2 = client.post(f"/admin/orders/{oid}/refund", json={"amount": "500.00"}, headers=auth(admin))
+    assert r2.status_code == 400
+
+    # Second partial refund for the rest
+    r3 = client.post(f"/admin/orders/{oid}/refund", json={"amount": "400.00"}, headers=auth(admin))
+    assert r3.status_code == 201
+    got2 = client.get(f"/orders/{oid}", headers=auth(cust)).json()
+    assert got2["payment_status"] == "refunded"
+    assert got2["amount_refunded"] == 500.0
+
+
+def test_cancel_paid_order_returns_refund_recommended(client):
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+    order = _create_paid_order(client, admin, cust, item)
+    oid = order["id"]
+
+    # Cancel the paid order
+    r = client.patch(f"/admin/orders/{oid}/status", json={"status": "cancelled"}, headers=auth(admin))
+    assert r.status_code == 200
+    assert r.json()["refund_recommended"] is True
+    assert r.json()["status"] == "cancelled"
+
+
+def test_refund_processed_webhook_idempotent(client):
+    """refund.processed webhook must be safe to receive twice."""
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+    order = _create_paid_order(client, admin, cust, item)
+    oid = order["id"]
+
+    # In mock mode, refund is already processed. Let's test the webhook path
+    # by creating a refund that's already processed — sending the webhook again should be idempotent
+    r = client.post(f"/admin/orders/{oid}/refund", headers=auth(admin))
+    refund = r.json()
+
+    # Construct a refund.processed webhook payload
+    body = json.dumps({"event": "refund.processed",
+                       "payload": {"refund": {"entity": {"id": refund["razorpay_refund_id"],
+                                                         "payment_id": refund["razorpay_payment_id"],
+                                                         "amount": 50000}}}}).encode()
+    sig = hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+
+    # First webhook call
+    r1 = client.post("/payments/webhook", content=body, headers={"X-Razorpay-Signature": sig})
+    assert r1.status_code == 200
+
+    # Second call — must not double-count
+    r2 = client.post("/payments/webhook", content=body, headers={"X-Razorpay-Signature": sig})
+    assert r2.status_code == 200
+
+    got = client.get(f"/orders/{oid}", headers=auth(cust)).json()
+    assert got["amount_refunded"] == 500.0  # not 1000

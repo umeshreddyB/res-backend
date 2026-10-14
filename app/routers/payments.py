@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
 from ..deps import get_current_user
-from ..models import Order, OrderStatus, Payment, User
+from ..models import Order, OrderStatus, Payment, PaymentStatus, Refund, RefundStatus, User
 from ..schemas import OrderOut, VerifyPaymentIn
 from ..services import petpooja, razorpay_service
 from ..services.payments import apply_payment_success
@@ -54,4 +54,25 @@ async def razorpay_webhook(request: Request, background: BackgroundTasks,
                 background.add_task(petpooja.push_order, payment.order_id)
         else:
             db.rollback()
+
+    elif body.get("event") == "refund.processed":
+        entity = body.get("payload", {}).get("refund", {}).get("entity", {})
+        rz_refund_id = entity.get("id", "")
+        if rz_refund_id:
+            refund = db.scalar(
+                select(Refund).where(Refund.razorpay_refund_id == rz_refund_id).with_for_update()
+            )
+            if refund and refund.status != RefundStatus.processed:
+                refund.status = RefundStatus.processed
+                order = db.scalar(select(Order).where(Order.id == refund.order_id).with_for_update())
+                if order:
+                    order.amount_refunded += refund.amount
+                    if order.amount_refunded >= order.amount_paid:
+                        order.payment_status = PaymentStatus.refunded
+                    else:
+                        order.payment_status = PaymentStatus.partially_refunded
+                db.commit()
+            else:
+                db.rollback()
+
     return {"status": "ok"}

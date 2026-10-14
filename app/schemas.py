@@ -5,7 +5,7 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
 
 from .models import (OrderStatus, OrderType, PaymentOption, PaymentStatus,
-                     ReservationStatus, Role)
+                     RefundStatus, ReservationStatus, Role)
 
 # money is returned to the frontend as a JSON number (e.g. 250.0), not a string
 Money = Annotated[Decimal, PlainSerializer(lambda v: float(v), return_type=float, when_used="json")]
@@ -176,12 +176,14 @@ class OrderOut(ORM):
     payment_status: PaymentStatus
     total: Money
     amount_paid: Money
+    amount_refunded: Money
     balance: Money
     customer_name: str
     customer_phone: Optional[str]
     notes: Optional[str]
     pickup_time: Optional[datetime]
     reservation_id: Optional[int]
+    needs_attention: bool = False
     created_at: datetime
     items: list[OrderItemOut]
 
@@ -207,3 +209,23 @@ class VerifyPaymentIn(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+
+
+class OrderStatusResult(OrderOut):
+    """Returned when admin changes order status. Includes refund_recommended flag."""
+    refund_recommended: bool = False
+
+
+class RefundIn(BaseModel):
+    amount: Optional[Decimal] = Field(default=None, gt=0, max_digits=10, decimal_places=2,
+                                       description="Partial refund amount. Omit for full refund.")
+
+
+class RefundOut(ORM):
+    id: int
+    order_id: int
+    razorpay_payment_id: str
+    razorpay_refund_id: Optional[str]
+    amount: Money
+    status: RefundStatus
+    created_at: datetime

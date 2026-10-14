@@ -40,3 +40,22 @@ def verify_webhook_signature(raw_body: bytes, signature: str) -> bool:
     if not settings.razorpay_webhook_secret:
         return False
     return hmac.compare_digest(_hmac(settings.razorpay_webhook_secret, raw_body), signature)
+
+
+def refund_payment(razorpay_payment_id: str, amount_paise: int) -> dict:
+    """Create a Razorpay refund (full or partial).
+
+    In mock mode (no RAZORPAY_KEY_ID), returns a fake refund id.
+    """
+    if not settings.razorpay_key_id:
+        return {"id": f"rfnd_mock_{uuid.uuid4().hex[:14]}", "amount": amount_paise,
+                "payment_id": razorpay_payment_id, "status": "processed"}
+    resp = httpx.post(
+        f"https://api.razorpay.com/v1/payments/{razorpay_payment_id}/refunds",
+        auth=(settings.razorpay_key_id, settings.razorpay_key_secret),
+        json={"amount": amount_paise},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
