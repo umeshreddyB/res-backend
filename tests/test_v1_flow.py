@@ -239,3 +239,66 @@ def test_refund_processed_webhook_idempotent(client):
 
     got = client.get(f"/orders/{oid}", headers=auth(cust)).json()
     assert got["amount_refunded"] == 500.0  # not 1000
+
+
+def test_abandoned_order_cleanup(client):
+    """Orders stuck in pending_payment for too long get auto-cancelled."""
+    from app.services.abandoned_orders import cancel_abandoned_orders
+    from app.db import SessionLocal
+    from app.models import Order
+    from datetime import timedelta
+
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+
+    # Create an order that stays in pending_payment
+    order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
+                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+    assert order["status"] == "pending_payment"
+
+    # Running cleanup now should not cancel it (too recent)
+    assert cancel_abandoned_orders(timeout_minutes=30) == 0
+
+    # Backdate the order's created_at so it looks old
+    with SessionLocal() as db:
+        o = db.get(Order, order["id"])
+        o.created_at = o.created_at - timedelta(minutes=31)
+        db.commit()
+
+    # Now cleanup should cancel it
+    assert cancel_abandoned_orders(timeout_minutes=30) == 1
+
+    got = client.get(f"/orders/{order['id']}", headers=auth(cust)).json()
+    assert got["status"] == "cancelled"
+
+    # Running again should not cancel anything (idempotent)
+    assert cancel_abandoned_orders(timeout_minutes=30) == 0
+
+
+def test_late_payment_for_cancelled_order(client):
+    """If a payment arrives (webhook) for a cancelled order, record the money and flag for admin."""
+    admin = login(client, "admin@example.com", "admin12345")
+    item = setup_menu_and_table(client, admin)
+    cust = register_customer(client)
+
+    order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
+                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+    rz_id = order["payment"]["razorpay_order_id"]
+    oid = order["id"]
+
+    # Cancel the order (admin cancel or timeout)
+    client.patch(f"/admin/orders/{oid}/status", json={"status": "cancelled"}, headers=auth(admin))
+
+    # Now a late payment arrives via webhook
+    body = json.dumps({"event": "payment.captured",
+                       "payload": {"payment": {"entity": {"id": "pay_late", "order_id": rz_id}}}}).encode()
+    sig = hmac.new(b"whsec", body, hashlib.sha256).hexdigest()
+    r = client.post("/payments/webhook", content=body, headers={"X-Razorpay-Signature": sig})
+    assert r.status_code == 200
+
+    # The money must be recorded, but the order stays cancelled with needs_attention flag
+    got = client.get(f"/orders/{oid}", headers=auth(cust)).json()
+    assert got["status"] == "cancelled"
+    assert got["amount_paid"] == 250.0  # money was recorded
+    assert got["needs_attention"] is True  # flagged for admin

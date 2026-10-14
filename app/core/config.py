@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     petpooja_enabled: bool = False
 
+    abandoned_order_timeout_minutes: int = 30
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

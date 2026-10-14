@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,7 @@ from .core.security import hash_password
 from .db import Base, SessionLocal, engine
 from .models import Role, User
 from .routers import auth, menu, orders, payments, reservations, tables
+from .services.abandoned_orders import abandoned_order_loop
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,7 +28,10 @@ async def lifespan(app: FastAPI):
             db.add(User(name="Admin", email=settings.admin_email.lower(),
                         password_hash=hash_password(settings.admin_password), role=Role.admin))
             db.commit()
+    # Start background cleanup for abandoned unpaid orders
+    cleanup_task = asyncio.create_task(abandoned_order_loop())
     yield
+    cleanup_task.cancel()
 
 
 app = FastAPI(title="Restaurant API", version="1.0.0", lifespan=lifespan)
