@@ -23,6 +23,11 @@ def _is_sqlite() -> bool:
 
 @pytest.fixture()
 def client():
+    # Reset rate limiter state between tests
+    from app.core.rate_limit import login_limiter, register_limiter
+    login_limiter._hits.clear()
+    register_limiter._hits.clear()
+
     if _is_sqlite():
         Base.metadata.drop_all(bind=engine)
     else:

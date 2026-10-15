@@ -26,6 +26,11 @@ class Settings(BaseSettings):
 
     abandoned_order_timeout_minutes: int = 30
 
+    # Rate limiting (in-memory; only accurate with a single worker — see README)
+    rate_limit_login: int = 10          # max attempts per window
+    rate_limit_register: int = 5
+    rate_limit_window_seconds: int = 60
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

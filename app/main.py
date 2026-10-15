@@ -18,8 +18,13 @@ logging.basicConfig(level=logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.env == "prod" and settings.secret_key == "change-me":
-        raise RuntimeError("Set a strong SECRET_KEY before running in production")
+    if settings.env == "prod":
+        if settings.secret_key == "change-me":
+            raise RuntimeError("Set a strong SECRET_KEY before running in production")
+        if settings.admin_password == "admin12345":
+            raise RuntimeError("Change the default ADMIN_PASSWORD before running in production")
+        if not settings.cors_list:
+            raise RuntimeError("Set CORS_ORIGINS before running in production")
     # Dev/test convenience. In production use Alembic: alembic upgrade head
     if settings.env != "prod":
         Base.metadata.create_all(bind=engine)

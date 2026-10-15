@@ -42,6 +42,19 @@ class TokenOut(BaseModel):
     user: UserOut
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+class CreateStaffIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    email: EmailStr
+    phone: Optional[str] = Field(default=None, max_length=20)
+    password: str = Field(min_length=8, max_length=64)
+    role: Role = Role.admin
+
+
 # ---------- menu ----------
 class CategoryIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
