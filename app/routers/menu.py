@@ -1,13 +1,15 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from ..core.config import settings
 from ..db import get_db
 from ..deps import require_admin
 from ..models import Category, MenuItem
 from ..schemas import (AvailabilityIn, CategoryIn, CategoryOut, CategoryUpdate,
                        CategoryWithItems, ItemIn, ItemOut, ItemUpdate)
+from ..services.storage import detect_image_type, storage
 
 router = APIRouter(prefix="/menu", tags=["menu"])
 admin_router = APIRouter(prefix="/admin", tags=["admin: menu"], dependencies=[Depends(require_admin)])
@@ -105,5 +107,53 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
     item = db.get(MenuItem, item_id)
     if not item:
         raise HTTPException(404, "Item not found")
+    if item.image_url:
+        storage.delete(item.image_url)
     db.delete(item)
     db.commit()
+
+
+@admin_router.post("/items/{item_id}/image", response_model=ItemOut)
+async def upload_item_image(item_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Upload an image for a menu item.
+
+    Validates file content using magic bytes (JPEG, PNG, WebP, GIF).
+    Enforces maximum upload size and saves under a secure random filename.
+    """
+    item = db.get(MenuItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    content = await file.read()
+    if len(content) > max_bytes:
+        raise HTTPException(413, f"Image file exceeds maximum allowed size of {settings.max_upload_size_mb}MB")
+
+    # Validate file by real content (magic bytes), not trusting file extension or Content-Type header
+    extension = detect_image_type(content)
+
+    # Delete previous image if one was uploaded
+    if item.image_url:
+        storage.delete(item.image_url)
+
+    # Save to storage (generates unique UUID filename)
+    image_url = storage.save(content, extension)
+    item.image_url = image_url
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@admin_router.delete("/items/{item_id}/image", response_model=ItemOut)
+def delete_item_image(item_id: int, db: Session = Depends(get_db)):
+    """Remove the image from a menu item and delete it from storage."""
+    item = db.get(MenuItem, item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item.image_url:
+        storage.delete(item.image_url)
+        item.image_url = None
+        db.commit()
+        db.refresh(item)
+    return item
+

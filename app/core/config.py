@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     rate_limit_register: int = 5
     rate_limit_window_seconds: int = 60
 
+    # Media / image uploads
+    media_dir: str = "media"
+    max_upload_size_mb: int = 5
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

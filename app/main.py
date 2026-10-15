@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from .core.config import settings
@@ -49,6 +51,9 @@ for r in (auth.router, menu.router, menu.admin_router, tables.router, tables.adm
           reservations.router, reservations.admin_router, orders.router, orders.admin_router,
           payments.router, settings_router.router, settings_router.admin_router):
     app.include_router(r)
+
+os.makedirs(settings.media_dir, exist_ok=True)
+app.mount("/media", StaticFiles(directory=settings.media_dir), name="media")
 
 
 @app.get("/health", tags=["system"])
