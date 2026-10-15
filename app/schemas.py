@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal
 from typing import Annotated, Optional
 
@@ -242,3 +242,31 @@ class RefundOut(ORM):
     amount: Money
     status: RefundStatus
     created_at: datetime
+
+
+# ---------- settings & operating hours ----------
+class OperatingHourItem(BaseModel):
+    day_of_week: int = Field(ge=0, le=6, description="0=Monday, 6=Sunday")
+    day_name: Optional[str] = None
+    is_closed: bool = False
+    open_time: Optional[time] = None   # e.g. "11:00:00"
+    close_time: Optional[time] = None  # e.g. "23:00:00" or "01:00:00"
+
+
+class RestaurantRules(BaseModel):
+    reservation_duration_minutes: int = Field(default=90, ge=15, le=360)
+    last_reservation_buffer_minutes: int = Field(default=60, ge=0, le=240)
+    max_party_size: int = Field(default=20, ge=1, le=100)
+    max_days_ahead: int = Field(default=30, ge=1, le=365)
+    advance_percent: int = Field(default=50, ge=0, le=100)
+
+
+class SettingsHoursOut(BaseModel):
+    rules: RestaurantRules
+    hours: list[OperatingHourItem]
+
+
+class UpdateSettingsHoursIn(BaseModel):
+    rules: Optional[RestaurantRules] = None
+    hours: Optional[list[OperatingHourItem]] = None
+

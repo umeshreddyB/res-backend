@@ -1,10 +1,10 @@
 import enum
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (Boolean, DateTime, Enum, ForeignKey, Integer, Numeric,
-                        String, Text, Index)
+                        String, Text, Time, Index)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -197,3 +197,23 @@ class Refund(Base):
     status: Mapped[RefundStatus] = mapped_column(E(RefundStatus), default=RefundStatus.created)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     order: Mapped[Order] = relationship(back_populates="refunds")
+
+
+class OperatingHour(Base):
+    __tablename__ = "operating_hours"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day_of_week: Mapped[int] = mapped_column(Integer, unique=True, index=True)  # 0=Monday, 6=Sunday
+    is_closed: Mapped[bool] = mapped_column(Boolean, default=False)
+    open_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+    close_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
+
+
+class RestaurantSetting(Base):
+    __tablename__ = "restaurant_settings"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reservation_duration_minutes: Mapped[int] = mapped_column(Integer, default=90)
+    last_reservation_buffer_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    max_party_size: Mapped[int] = mapped_column(Integer, default=20)
+    max_days_ahead: Mapped[int] = mapped_column(Integer, default=30)
+    advance_percent: Mapped[int] = mapped_column(Integer, default=50)
+

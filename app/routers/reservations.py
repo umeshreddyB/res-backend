@@ -12,6 +12,7 @@ from ..deps import get_current_user, require_admin
 from ..models import DiningTable, Reservation, ReservationStatus, User
 from ..schemas import ReservationIn, ReservationOut, ReservationStatusIn
 from ..services.booking import free_tables, lock_table, table_is_free
+from ..services.settings_service import validate_reservation_slot
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
 admin_router = APIRouter(prefix="/admin/reservations", tags=["admin: reservations"],
@@ -22,10 +23,7 @@ _load = (joinedload(Reservation.user), joinedload(Reservation.table))
 
 @router.post("", response_model=ReservationOut, status_code=201)
 def create_reservation(data: ReservationIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    start = to_utc(data.start_time)
-    if start <= now_utc():
-        raise HTTPException(400, "Reservation time must be in the future")
-    end = start + timedelta(minutes=settings.reservation_minutes)
+    start, end = validate_reservation_slot(db, data.start_time, data.guests)
 
     if data.table_id:
         table = db.get(DiningTable, data.table_id)

@@ -42,7 +42,7 @@ def test_concurrent_reservation_same_slot(client: TestClient):
     cust1 = _register(client, "racer1@example.com")
     cust2 = _register(client, "racer2@example.com")
 
-    start = (datetime.now(timezone.utc) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    start = (datetime.now(timezone.utc) + timedelta(days=3)).replace(hour=13, minute=0, second=0, microsecond=0).isoformat()
     payload = {"guests": 2, "start_time": start, "table_id": 1}
 
     results = [None, None]

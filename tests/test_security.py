@@ -72,7 +72,7 @@ def test_user_cannot_read_other_users_reservations(client):
     user_a = register_customer(client, "a@example.com")
     user_b = register_customer(client, "b@example.com")
 
-    start = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0).isoformat()
+    start = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=13, minute=0, second=0, microsecond=0).isoformat()
     res_a = client.post("/reservations", json={"guests": 2, "start_time": start},
                         headers=auth(user_a))
     assert res_a.status_code == 201

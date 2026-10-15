@@ -10,7 +10,8 @@ from .core.config import settings
 from .core.security import hash_password
 from .db import Base, SessionLocal, engine
 from .models import Role, User
-from .routers import auth, menu, orders, payments, reservations, tables
+from .routers import (auth, menu, orders, payments, reservations, settings as
+                     settings_router, tables)
 from .services.abandoned_orders import abandoned_order_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +47,7 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_list, allow_crede
 
 for r in (auth.router, menu.router, menu.admin_router, tables.router, tables.admin_router,
           reservations.router, reservations.admin_router, orders.router, orders.admin_router,
-          payments.router):
+          payments.router, settings_router.router, settings_router.admin_router):
     app.include_router(r)
 
 

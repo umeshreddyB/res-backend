@@ -12,6 +12,7 @@ from ..deps import require_admin
 from ..models import DiningTable, Reservation, ReservationStatus
 from ..schemas import TableIn, TableOut, TableUpdate
 from ..services.booking import free_tables
+from ..services.settings_service import validate_reservation_slot
 
 router = APIRouter(prefix="/tables", tags=["tables"])
 admin_router = APIRouter(prefix="/admin/tables", tags=["admin: tables"], dependencies=[Depends(require_admin)])
@@ -22,8 +23,7 @@ def table_availability(start_time: datetime = Query(..., description="Wanted slo
                        guests: int = Query(1, ge=1, le=50),
                        db: Session = Depends(get_db)):
     """Tables that are free for the slot (start_time to start_time + reservation length) and fit the party."""
-    start = to_utc(start_time)
-    end = start + timedelta(minutes=settings.reservation_minutes)
+    start, end = validate_reservation_slot(db, start_time, guests)
     return free_tables(db, start, end, guests)
 
 

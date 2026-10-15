@@ -54,7 +54,7 @@ def test_reservation_no_double_booking(client):
     admin = login(client, "admin@example.com", "admin12345")
     setup_menu_and_table(client, admin)  # only 1 table
     cust = register_customer(client)
-    start = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0).isoformat()
+    start = (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=13, minute=0, second=0, microsecond=0).isoformat()
     r1 = client.post("/reservations", json={"guests": 2, "start_time": start}, headers=auth(cust))
     assert r1.status_code == 201, r1.text
     r2 = client.post("/reservations", json={"guests": 2, "start_time": start}, headers=auth(cust))
