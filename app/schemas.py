@@ -196,6 +196,8 @@ class OrderOut(ORM):
     notes: Optional[str]
     pickup_time: Optional[datetime]
     reservation_id: Optional[int]
+    petpooja_order_id: Optional[str] = None
+    petpooja_status: Optional[str] = None
     needs_attention: bool = False
     created_at: datetime
     items: list[OrderItemOut]

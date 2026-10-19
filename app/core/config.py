@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str = ""
 
     petpooja_enabled: bool = False
+    petpooja_base_url: str = "https://api.petpooja.com"
+    petpooja_app_key: str = ""
+    petpooja_app_secret: str = ""
+    petpooja_access_token: str = ""
+    petpooja_rest_id: str = ""
 
     abandoned_order_timeout_minutes: int = 30
 
