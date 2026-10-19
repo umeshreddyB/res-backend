@@ -17,10 +17,13 @@ from app.core.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 import app.models  # noqa: E402,F401 — side effect: registers all models on Base.metadata
 
+import os
+
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url from app settings so we have one source of truth.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url from environment or app settings so we have one source of truth.
+db_url = os.environ.get("DATABASE_URL") or os.environ.get("TEST_DATABASE_URL") or settings.database_url
+config.set_main_option("sqlalchemy.url", db_url)
 
 
 def run_migrations_offline() -> None:
