@@ -28,8 +28,12 @@ def get_or_create_settings(db: Session) -> RestaurantSetting:
             advance_percent=50,
         )
         db.add(setting)
-        db.commit()
-        db.refresh(setting)
+        try:
+            db.commit()
+            db.refresh(setting)
+        except Exception:
+            db.rollback()
+            setting = db.scalar(select(RestaurantSetting).where(RestaurantSetting.id == 1))
     return setting
 
 
@@ -46,7 +50,10 @@ def get_operating_hours(db: Session) -> list[OperatingHour]:
                     close_time=DEFAULT_CLOSE,
                 )
                 db.add(h)
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         hours = list(db.scalars(select(OperatingHour).order_by(OperatingHour.day_of_week)).all())
     return hours
 

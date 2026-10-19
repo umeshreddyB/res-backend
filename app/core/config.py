@@ -42,9 +42,17 @@ class Settings(BaseSettings):
     media_dir: str = "media"
     max_upload_size_mb: int = 5
 
+    # Reverse proxy / security
+    trusted_proxies: str = "127.0.0.1,::1"
+    log_level: str = "INFO"
+
     @property
     def cors_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def trusted_proxy_list(self) -> list[str]:
+        return [p.strip() for p in self.trusted_proxies.split(",") if p.strip()]
 
 
 @lru_cache

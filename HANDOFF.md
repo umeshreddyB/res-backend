@@ -1,88 +1,107 @@
-# Restaurant Backend V1 - Handoff & Progress Context
+# Restaurant Backend V1 - Handoff & Architecture Context
 
-## Project Summary
-This is the backend for a restaurant web application in India operating alongside the restaurant's existing **PetPooja POS** system. It supports:
-- Customer takeaway & dine-in ordering (full online payment, 50% advance, or pay at pickup).
-- Razorpay payment gateway integration with webhooks and refund handling.
-- Table reservation system with double-booking prevention (PostgreSQL row locks), operating hours enforcement (including past-midnight shifts and closed days), and custom booking rules.
-- Menu management with category hierarchy and image upload using magic bytes detection.
-- PetPooja POS integration architecture with separated order payload mapping, retry loop, and callback webhook endpoints.
-- Role-based security (customer vs admin), rate limiting, phone number validation, and production environment guards.
+## 1. Project Overview
+This repository is the backend for a restaurant web application in India operating alongside the restaurant's existing **PetPooja POS** billing software.
 
----
-
-## Git Commit History
-Each task was completed with its own separate git commit:
-1. `176355f` - **Task 1: Add Alembic migrations with initial schema**
-2. `58b27c4` - **Task 2: PostgreSQL test support, concurrency test, GitHub Actions CI**
-3. `27dd36a` - **Task 3: Refunds** - Razorpay refund API, partial refunds, `refund_recommended` flag, webhook
-4. `cdde131` - **Task 4: Abandoned unpaid orders** - multi-worker safe cleanup (`SELECT ... FOR UPDATE SKIP LOCKED`), late payment handling
-5. `aae1601` - **Task 5: Security hardening** - rate limiting, change password, admin staff creation, phone validation, prod checks
-6. `0bb23ed` - **Task 6: Opening hours & reservation rules** - DB settings, closed days, past-midnight shifts, Alembic migration, tests
-7. `0fc4a4d` - **Task 7: Menu images** - pluggable storage, magic bytes validation, UUID filenames, `/media` route, tests
-8. `9bd2fa0` - **Task 8: PetPooja POS integration structure** - separated order mapping, retry loop, callbacks, Alembic migration, tests
+### Technology Stack
+- **Framework:** FastAPI (Python 3.12+)
+- **Database:** PostgreSQL (with psycopg 3) in production; SQLite supported for local dev/testing
+- **ORM & Migrations:** SQLAlchemy 2.0 + Alembic (5 migrations)
+- **Validation:** Pydantic v2 & Pydantic Settings
+- **Payment Gateway:** Razorpay (mock mode when keys are absent)
+- **POS Integration:** PetPooja (clean architecture, separated mapping, retry loop, webhooks)
 
 ---
 
-## Alembic Migrations
-All 4 Alembic migrations have been created, sequentially linked, and tested from scratch on an empty database:
-1. `b237ff2ee75b_initial_schema.py`: Initial schema (users, menu_categories, menu_items, dining_tables, reservations, orders, order_items, payments).
-2. `db04b9d1d367_add_refunds_and_order_flags.py`: `refunds` table, `orders.amount_refunded`, `orders.needs_attention`.
-3. `925a2cee4b0b_add_operating_hours_and_restaurant_settings.py`: `operating_hours` table, `restaurant_settings` table.
-4. `26ed25bd5c63_add_petpooja_order_fields.py`: `orders.petpooja_status`, `orders.petpooja_attempts`, `orders.petpooja_last_error`, `orders.petpooja_pushed_at`.
+## 2. Booking, Table & Payment Rules (Critical for Frontend & Team)
+
+### A. Full Online Payment Only
+- Customer takeaway and dine-in orders **must use `payment_option="full_online"`**.
+- Prices and balances are strictly calculated on the backend from menu item prices; the frontend never submits amounts.
+- Online orders return a Razorpay payment object (`razorpay_order_id`, `key_id`, `amount_paise`). Frontend opens Razorpay Checkout and posts signature to `POST /payments/verify`.
+
+### B. Table Channels (`own_app`, `swiggy`, `walk_in`)
+- Tables are allocated to specific business channels:
+  - `own_app`: Tables designated for bookings & dine-in orders through this web app.
+  - `swiggy`: Reserved for external delivery / partner dine-in aggregators.
+  - `walk_in`: Reserved for physical walk-in guests at the counter.
+- **Channel Isolation:**
+  - Public availability (`GET /tables/availability`) and customer dine-in auto-assignment **only check and assign `own_app` tables**.
+  - Admin endpoints (`GET/POST/PATCH/DELETE /admin/tables`) allow managing tables across all channels.
+  - Admin manual reservations (`POST /admin/reservations`) allow staff to book or block any table on any channel (e.g. Swiggy booking or walk-in seating), blocking slot availability for that table.
+  - Changing a table's channel via `PATCH /admin/tables/{id}` is rejected with `409 Conflict` if future reservations exist for that table.
+
+### C. Takeaway Orders
+- `POST /orders` with `order_type="takeaway"` requires `pickup_time` (future, within operating hours, respecting buffers).
+
+### D. Dine-In Orders & Atomic Table Holds
+- `POST /orders` with `order_type="dine_in"` atomically creates:
+  1. A `Reservation` with `status="held"`, `source="own_app"`, and `hold_expires_at = now + HOLD_MINUTES` (default 15 minutes).
+  2. An `Order` with `status="pending_payment"` linked to the reservation.
+- If `table_id` is omitted, the backend auto-assigns the smallest available `own_app` table matching the party size.
+- **Locking & Concurrency:** Protected by database row locks (`SELECT ... FOR UPDATE`) so concurrent diners cannot hold the same table.
+- **Payment Verification:**
+  - When payment is verified (`POST /payments/verify`), the order status transitions to `placed` and the reservation transitions to `confirmed` in the exact same database transaction.
+- **Abandoned Hold Cleanup:**
+  - If payment is not completed before `hold_expires_at`, background cleanup cancels the order and releases the held reservation.
+- **Late Payment Recovery:**
+  - If a customer completes payment after hold expiration, the system checks if the table is still free. If free, it confirms the table. If already taken, the order is marked `placed` with `needs_attention=True` and flagged for refund to prevent double-booking.
+
+### E. Operating Hours & Reservation Settings
+- Stored dynamically in the database (`operating_hours` and `restaurant_settings`).
+- Supports closed days and past-midnight shifts (e.g. Friday 6:00 PM to 1:00 AM Saturday).
+- Enforces `last_reservation_buffer_minutes` (default 60 mins before closing), `max_party_size` (default 20), `max_days_ahead` (default 30), and `reservation_duration_minutes` (default 90).
+- All times localized to `Asia/Kolkata` (`UTC+05:30`).
 
 ---
 
-## Test Suite Status
-All **39 tests pass** (1 test skipped when running locally on SQLite because it requires PostgreSQL for row-level concurrency locks):
-```
-================== 39 passed, 1 skipped, 1 warning in 47.63s ==================
-```
-- `tests/test_v1_flow.py`: Full order, payment, and refund lifecycle.
-- `tests/test_security.py`: Role authorization, cross-user isolation, password changes, staff creation, rate limiting, Indian phone validation.
-- `tests/test_hours.py`: Public & admin opening hours, closed days, overnight shifts past midnight, reservation buffers, max party size, timezone conversions (Asia/Kolkata).
-- `tests/test_images.py`: JPEG, PNG, WebP uploads, magic bytes validation, UUID filenames, disk cleanup on replacement/deletion, file size limits.
-- `tests/test_petpooja.py`: Mocked push, failed push tracking, retry loop, callbacks, and order payload mapping.
-- `tests/test_postgres.py`: PostgreSQL concurrency test with thread barrier.
+## 3. Reports & Analytics (Admin)
+Four reporting endpoints under `/admin/reports`:
+1. `GET /admin/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`: Business KPIs, net sales, gross paid, total refunded, cancelled orders, average order value, breakdown by order type (`takeaway`, `dine_in`), and counts by payment status.
+2. `GET /admin/reports/daily?from=YYYY-MM-DD&to=YYYY-MM-DD`: Day-by-day sales and order volume aggregated in restaurant local timezone (`Asia/Kolkata`).
+3. `GET /admin/reports/top-items?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=10`: Top selling menu items ranked by quantity and revenue.
+4. `GET /admin/reports/orders.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`: Direct CSV export with formula injection protection (sanitizes `=, +, -, @` prefixes).
 
 ---
 
-## What We Need from the Client for PetPooja (Task 8 requirement)
-As required, the PetPooja integration structure, mapping hook, retry loop, and mocked test harness are built without guessing the proprietary payload. To finalize live PetPooja integration:
-1. **API Credentials**:
-   - `petpooja_app_key`
-   - `petpooja_app_secret`
-   - `petpooja_access_token`
-   - `petpooja_rest_id` (Restaurant ID)
-   - PetPooja environment Base URL (Sandbox vs Production)
-2. **Official PetPooja API Documentation**:
-   - The official `save_order` JSON specification (field names, tax structures, discount formatting, and payment mode codes).
-   - The menu synchronization and order status callback webhook specifications.
-3. **Menu Item Mapping**:
-   - Mapping between restaurant menu item IDs / SKUs and PetPooja `petpooja_item_id`s.
+## 4. Git Commits & Completed Tasks
+- `176355f` - **Task 1:** Alembic migrations setup & initial schema
+- `58b27c4` - **Task 2:** PostgreSQL test support, concurrency test, GitHub Actions CI
+- `27dd36a` - **Task 3:** Razorpay refunds, partial refund tracking, row-level locks, idempotent webhooks
+- `cdde131` - **Task 4:** Abandoned unpaid orders cleanup (`SELECT ... FOR UPDATE SKIP LOCKED`), late payment recovery
+- `aae1601` - **Task 5:** Security hardening - rate limiting, change password, admin staff creation, Indian phone validation, prod checks
+- `0bb23ed` - **Task 6:** Opening hours & reservation rules - DB settings, closed days, past-midnight shifts, migration, tests
+- `0fc4a4d` - **Task 7:** Menu images - pluggable storage, magic bytes validation, UUID filenames, `/media` route, tests
+- `9bd2fa0` - **Task 8:** PetPooja POS integration structure - separated order mapping, retry loop, callbacks, migration, tests
+- `2da1ece` - **Task A:** Booking model change - table channels (`own_app`, `swiggy`, `walk_in`), held reservations, atomic dine-in, takeaway pickup_time
+- `116bf85` - **Task B:** Admin sales reports - summary, daily sales, top items, orders CSV export, tests, and documentation
+- Task 9: Production readiness - DB health check (503), request IDs (`X-Request-ID`), consistent JSON error formatting, trusted proxy parsing, full `.env.example`, Linux VPS deployment guide in `README.md`
 
 ---
 
-## Next Steps: Task 9 (Production Readiness)
-The final planned task is **Task 9: Production Readiness**:
-1. **Structured Logging**: Request IDs (middleware) and JSON logging for production.
-2. **Health Check**: Update `GET /health` to perform a database ping check.
-3. **Consistent JSON Error Format**: Global exception handlers for standard `{ "detail": ... }` responses.
-4. **Environment Configuration**: Update `.env.example` with all configuration options (Razorpay, PetPooja, Rate Limiting, CORS, DB, Media).
-5. **Deployment Guide in README**: VPS deployment steps, Systemd service unit, Nginx reverse proxy with SSL/HTTPS, database migrations command, and media backup instructions.
+## 5. Alembic Migrations
+All 5 migrations are sequentially versioned and verified:
+1. `b237ff2ee75b_initial_schema.py`: Initial schema
+2. `db04b9d1d367_add_refunds_and_order_flags.py`: `refunds` table, `orders.amount_refunded`, `orders.needs_attention`
+3. `925a2cee4b0b_add_operating_hours_and_restaurant_settings.py`: `operating_hours`, `restaurant_settings`
+4. `26ed25bd5c63_add_petpooja_order_fields.py`: `orders.petpooja_*` fields
+5. `3f8a1c9e2d4b_add_table_channels_and_held_reservations.py`: `dining_tables.channel`, `reservations.source`, `reservations.hold_expires_at`, `reservations.customer_name`
 
 ---
 
-## Quick Commands to Resume in New Chat
-- Run all tests:
-  ```powershell
-  .\venv\Scripts\python.exe -m pytest tests/ -v
-  ```
-- Run migrations:
-  ```powershell
-  .\venv\Scripts\alembic.exe upgrade head
-  ```
-- Start backend dev server:
-  ```powershell
-  .\venv\Scripts\uvicorn.exe app.main:app --reload
-  ```
+## 6. Test Suite Status
+Total tests: **67 tests**
+- Running on SQLite: **64 passed, 3 skipped** (the 3 PostgreSQL tests in `test_postgres.py` require PostgreSQL row-level locks).
+- Running on PostgreSQL (`TEST_DATABASE_URL`): **67 passed, 0 skipped**.
+
+Test files:
+- `tests/test_v1_flow.py`: Core order and payment flows, refunds, abandoned cleanup
+- `tests/test_booking_rules.py`: Channels, holds, dine-in/takeaway booking rules, late payment handling
+- `tests/test_security.py`: Authorization, cross-user isolation, password changes, staff creation, rate limiting, phone validation
+- `tests/test_hours.py`: Operating hours, closed days, past-midnight shifts, buffers, party size, timezone
+- `tests/test_images.py`: Image upload, magic bytes, UUID names, cleanup, size limits
+- `tests/test_petpooja.py`: Mocked push, failed push tracking, retry loop, callbacks, order mapping
+- `tests/test_reports.py`: Sales summary, daily breakdown, top items, CSV export, validation
+- `tests/test_production.py`: Health check with DB probe (200 & 503), `X-Request-ID` propagation, consistent JSON error responses, trusted proxy validation
+- `tests/test_postgres.py`: Row-lock concurrency tests and Alembic migrations on fresh PostgreSQL
+

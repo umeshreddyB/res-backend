@@ -1,10 +1,4 @@
-"""Simple in-memory rate limiter.
-
-WARNING: This only works correctly with a SINGLE worker process. If running multiple
-Gunicorn/Uvicorn workers, each worker has its own counter — the effective limit is
-multiplied by the number of workers. For strict multi-worker enforcement, store
-counters in Redis or the database. See README for details.
-"""
+import ipaddress
 import time
 from collections import defaultdict
 
@@ -39,8 +33,46 @@ login_limiter = RateLimiter(settings.rate_limit_login, settings.rate_limit_windo
 register_limiter = RateLimiter(settings.rate_limit_register, settings.rate_limit_window_seconds)
 
 
+def is_trusted_proxy(ip: str) -> bool:
+    """Check whether the given IP is a configured trusted reverse proxy."""
+    if not ip or ip == "unknown":
+        return False
+    try:
+        client_addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+
+    for proxy_str in settings.trusted_proxy_list:
+        if proxy_str == "*":
+            return True
+        try:
+            if "/" in proxy_str:
+                if client_addr in ipaddress.ip_network(proxy_str, strict=False):
+                    return True
+            else:
+                if client_addr == ipaddress.ip_address(proxy_str):
+                    return True
+        except ValueError:
+            if proxy_str == ip:
+                return True
+    return False
+
+
 def get_client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Extract client IP address.
+
+    Only trusts the 'X-Forwarded-For' header when the request originates from a
+    trusted proxy (configured via TRUSTED_PROXIES). Otherwise uses request.client.host
+    to prevent IP spoofing attacks.
+    """
+    direct_ip = request.client.host if request.client else "unknown"
+
+    if is_trusted_proxy(direct_ip):
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+            if client_ip:
+                return client_ip
+
+    return direct_ip
+

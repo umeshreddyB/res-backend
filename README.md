@@ -155,11 +155,284 @@ be built before the client's Razorpay account is ready. Real keys: set `RAZORPAY
 - Admin order screen: poll `GET /admin/orders?status=placed` every few seconds in V1 (WebSocket comes in V2).
 - Reservation length is `RESERVATION_MINUTES` (default 90).
 
-## Not done yet (next steps)
+## Production Deployment Guide (Single Linux VPS)
 
-- **PetPooja push**: `app/services/petpooja.py` is a stub. Needs the client's API keys and PetPooja's official payload.
-- **Alembic migrations** before production: `create_all` on startup is only for development.
-- Refunds (cancelled paid orders are refunded manually in the Razorpay dashboard for now), a cleanup job for
-  abandoned `pending_payment` orders, rate limiting on login, opening-hours rules for reservations,
-  image upload (menu items take an `image_url` now), email/SMS confirmations.
-- V2: add `delivery` to `OrderType` (+ lat/lng and 1 km check), `table_id` on orders for QR ordering, WebSocket.
+This guide walks through deploying the backend on a single Ubuntu 22.04 / 24.04 LTS VPS without Docker, using standard system tools: PostgreSQL, Python virtual environment, Gunicorn with Uvicorn workers managed by Systemd, Nginx reverse proxy with Let's Encrypt SSL, UFW firewall, daily automated backups, and zero-downtime database migrations.
+
+---
+
+### 1. Server Prerequisites & System Packages
+
+Update system packages and install Python, PostgreSQL, Nginx, and Certbot:
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3 python3-venv python3-pip postgresql postgresql-contrib nginx certbot python3-certbot-nginx ufw git
+```
+
+---
+
+### 2. Basic Firewall Setup (UFW)
+
+Secure the VPS by allowing only SSH, HTTP, and HTTPS traffic:
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw --force enable
+sudo ufw status
+```
+
+---
+
+### 3. PostgreSQL Database Setup
+
+Create a dedicated database user and production database:
+```bash
+sudo -u postgres psql
+```
+Inside the `psql` console:
+```sql
+CREATE USER restaurant_user WITH PASSWORD 'StrongSecureDatabasePasswordHere';
+CREATE DATABASE restaurant OWNER restaurant_user;
+GRANT ALL PRIVILEGES ON DATABASE restaurant TO restaurant_user;
+\q
+```
+
+---
+
+### 4. Application Installation
+
+Create an application directory (e.g. `/var/www/restaurant-backend`), clone the repository, and set up the Python virtual environment:
+```bash
+sudo mkdir -p /var/www/restaurant-backend
+sudo chown -R $USER:$USER /var/www/restaurant-backend
+cd /var/www/restaurant-backend
+
+# Clone your repository
+git clone https://github.com/umeshreddyB/res-backend.git .
+
+# Create virtualenv and install dependencies (including gunicorn)
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+pip install gunicorn
+```
+
+---
+
+### 5. Production Environment Configuration (`.env`)
+
+Create the production `.env` file:
+```bash
+cp .env.example .env
+nano .env
+```
+Ensure the following critical production variables are set:
+```ini
+ENV=prod
+DATABASE_URL=postgresql+psycopg://restaurant_user:StrongSecureDatabasePasswordHere@localhost:5432/restaurant
+SECRET_KEY=generate-a-long-random-secret-key-at-least-32-chars
+CORS_ORIGINS=https://your-frontend-domain.com
+ADMIN_EMAIL=admin@your-restaurant.com
+ADMIN_PASSWORD=SetAStrongUniqueAdminPassword
+TIMEZONE=Asia/Kolkata
+TRUSTED_PROXIES=127.0.0.1,::1
+MEDIA_DIR=/var/www/restaurant-backend/media
+```
+*(In `ENV=prod`, the backend refuses to start if `SECRET_KEY` or `ADMIN_PASSWORD` are left at defaults or if `CORS_ORIGINS` is empty).*
+
+---
+
+### 6. Run Alembic Migrations
+
+Apply all schema migrations to the production database:
+```bash
+source venv/bin/activate
+alembic upgrade head
+```
+
+---
+
+### 7. Systemd Service Unit (`Gunicorn + Uvicorn`)
+
+Create a systemd service file to manage the application process and ensure auto-start on boot and automatic restart on crashes:
+```bash
+sudo nano /etc/systemd/system/restaurant-api.service
+```
+Paste the following configuration:
+```ini
+[Unit]
+Description=Restaurant Backend FastAPI Service
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/restaurant-backend
+EnvironmentFile=/var/www/restaurant-backend/.env
+ExecStart=/var/www/restaurant-backend/venv/bin/gunicorn app.main:app \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8000 \
+    --access-logfile /var/log/restaurant-api-access.log \
+    --error-logfile /var/log/restaurant-api-error.log \
+    --forwarded-allow-ips "127.0.0.1,::1"
+
+Restart=always
+RestartSec=5s
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Set appropriate directory ownership and start the service:
+```bash
+sudo chown -R www-data:www-data /var/www/restaurant-backend
+sudo systemctl daemon-reload
+sudo systemctl enable restaurant-api
+sudo systemctl start restaurant-api
+sudo systemctl status restaurant-api
+```
+
+---
+
+### 8. Nginx Reverse Proxy Configuration
+
+Create an Nginx configuration file for the site:
+```bash
+sudo nano /etc/nginx/sites-available/restaurant-api
+```
+Add the server block:
+```nginx
+server {
+    server_name api.your-restaurant.com;
+
+    client_max_body_size 10M;
+
+    # Static media files served directly by Nginx
+    location /media/ {
+        alias /var/www/restaurant-backend/media/;
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
+        access_log off;
+    }
+
+    # Proxy all API requests to Gunicorn/Uvicorn
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 60s;
+    }
+}
+```
+
+Enable the site and test Nginx configuration:
+```bash
+sudo ln -s /etc/nginx/sites-available/restaurant-api /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+---
+
+### 9. SSL / HTTPS Setup (Certbot Let's Encrypt)
+
+Obtain and configure free, automatically-renewing SSL certificates:
+```bash
+sudo certbot --nginx -d api.your-restaurant.com
+```
+Test automatic renewal:
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+### 10. Automated Daily PostgreSQL Backups & Restore Steps
+
+#### A. Backup Script
+Create a backup directory and automated script:
+```bash
+sudo mkdir -p /var/backups/restaurant-db
+sudo nano /usr/local/bin/backup-restaurant-db.sh
+```
+Add the script content:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BACKUP_DIR="/var/backups/restaurant-db"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+BACKUP_FILE="${BACKUP_DIR}/restaurant_${TIMESTAMP}.sql.gz"
+
+# Export database
+PGPASSWORD="StrongSecureDatabasePasswordHere" pg_dump -h localhost -U restaurant_user -d restaurant | gzip > "${BACKUP_FILE}"
+
+# Restrict permissions
+chmod 600 "${BACKUP_FILE}"
+
+# Retain backups for 14 days, delete older
+find "${BACKUP_DIR}" -type f -name "restaurant_*.sql.gz" -mtime +14 -delete
+
+echo "Backup created: ${BACKUP_FILE}"
+```
+Make the script executable:
+```bash
+sudo chmod +x /usr/local/bin/backup-restaurant-db.sh
+```
+
+#### B. Daily Cron Job
+Add a cron job to run the backup daily at 2:30 AM:
+```bash
+sudo crontab -e
+```
+Add line:
+```cron
+30 2 * * * /usr/local/bin/backup-restaurant-db.sh >> /var/log/db-backup.log 2>&1
+```
+
+#### C. Database Restore Procedure
+To restore the database from a backup file:
+```bash
+# 1. Stop the application service to prevent new writes
+sudo systemctl stop restaurant-api
+
+# 2. Decompress and restore into PostgreSQL
+gunzip -c /var/backups/restaurant-db/restaurant_YYYYMMDD_HHMMSS.sql.gz | PGPASSWORD="StrongSecureDatabasePasswordHere" psql -h localhost -U restaurant_user -d restaurant
+
+# 3. Restart the application service
+sudo systemctl start restaurant-api
+```
+
+---
+
+### 11. Routine Deployment Workflow (`deploy.sh`)
+
+Every subsequent code deployment must pull changes, install updated dependencies, run pending Alembic migrations, and restart the service:
+```bash
+cd /var/www/restaurant-backend
+git pull origin master
+source venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+sudo systemctl restart restaurant-api
+```
+Check health:
+```bash
+curl -i https://api.your-restaurant.com/health
+```
+*(Returns `{"status": "ok", "database": "ok", "request_id": "..."}`)*
+
