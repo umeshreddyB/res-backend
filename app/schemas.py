@@ -293,3 +293,39 @@ class UpdateSettingsHoursIn(BaseModel):
     rules: Optional[RestaurantRules] = None
     hours: Optional[list[OperatingHourItem]] = None
 
+
+# ---------- sales reports ----------
+class OrderTypeSummary(BaseModel):
+    order_type: OrderType
+    orders: int
+    net_sales: Money
+
+
+class SummaryReportOut(BaseModel):
+    net_sales: Money
+    gross_paid: Money
+    total_refunded: Money
+    orders_count: int
+    cancelled_count: int
+    average_order_value: Money
+    by_order_type: list[OrderTypeSummary]
+    by_payment_status: dict[str, int]
+    pending_amount: Money
+
+
+class DailyReportItem(BaseModel):
+    date: str
+    net_sales: Money
+    gross_paid: Money
+    total_refunded: Money
+    orders_count: int
+    cancelled_count: int
+
+
+class TopItemReportItem(BaseModel):
+    item_id: Optional[int] = None
+    item_name: str
+    quantity_sold: int
+    net_sales: Money
+
+

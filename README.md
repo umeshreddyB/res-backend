@@ -64,6 +64,74 @@ Tests: `pytest` (uses SQLite, no setup needed).
 | Orders | `POST /orders` (takeaway with pickup_time; dine_in creates atomic held table + order), `GET /orders/me`, `GET /orders/{id}` | customer |
 | Orders admin | `GET /admin/orders?status=&date=`, `PATCH /admin/orders/{id}/status`, `POST /admin/orders/{id}/mark-paid` | admin |
 | Payments | `POST /payments/verify`, `POST /payments/webhook` | customer / Razorpay |
+| Settings | `GET /settings/hours` | public |
+| Settings admin | `GET /admin/settings/hours`, `PUT /admin/settings/hours` | admin |
+| PetPooja admin | `POST /admin/petpooja/retry`, `POST /admin/petpooja/orders/{id}/push` | admin |
+| Reports admin | `GET /admin/reports/summary`, `GET /admin/reports/daily`, `GET /admin/reports/top-items`, `GET /admin/reports/orders.csv` | admin |
+
+### Reports endpoints & response shapes (admin)
+
+All report endpoints accept optional `from` and `to` query parameters in ISO format (`YYYY-MM-DD`). Defaults to today in `TIMEZONE` (Asia/Kolkata). Date ranges cannot exceed 366 days.
+
+1. **Summary Report (`GET /admin/reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD`)**
+   High-level business KPIs, breakdown by order type, and payment status counts:
+   ```json
+   {
+     "net_sales": 12500.0,
+     "gross_paid": 13000.0,
+     "total_refunded": 500.0,
+     "orders_count": 42,
+     "cancelled_count": 3,
+     "average_order_value": 297.62,
+     "by_order_type": [
+       {"order_type": "takeaway", "orders": 22, "net_sales": 6500.0},
+       {"order_type": "dine_in", "orders": 20, "net_sales": 6000.0}
+     ],
+     "by_payment_status": {
+       "unpaid": 2,
+       "partially_paid": 0,
+       "paid": 37,
+       "partially_refunded": 1,
+       "refunded": 2
+     },
+     "pending_amount": 450.0
+   }
+   ```
+
+2. **Daily Sales Report (`GET /admin/reports/daily?from=YYYY-MM-DD&to=YYYY-MM-DD`)**
+   Day-by-day sales breakdown aggregated in the restaurant's local timezone:
+   ```json
+   [
+     {
+       "date": "2026-10-18",
+       "net_sales": 6200.0,
+       "gross_paid": 6500.0,
+       "total_refunded": 300.0,
+       "orders_count": 21,
+       "cancelled_count": 1
+     }
+   ]
+   ```
+
+3. **Top Selling Items (`GET /admin/reports/top-items?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=10`)**
+   Top items ranked by quantity sold and net sales (excludes cancelled orders):
+   ```json
+   [
+     {
+       "item_id": 1,
+       "item_name": "Chicken Biryani",
+       "quantity_sold": 45,
+       "net_sales": 15750.0
+     }
+   ]
+   ```
+
+4. **Orders CSV Export (`GET /admin/reports/orders.csv?from=YYYY-MM-DD&to=YYYY-MM-DD`)**
+   Direct CSV file download (`Content-Type: text/csv; Content-Disposition: attachment; filename="orders_YYYY-MM-DD_YYYY-MM-DD.csv"`) with formula injection protection (values starting with `=`, `+`, `-`, or `@` are safely prefixed with a quote):
+   Columns:
+   `order_id,created_at,order_type,table_number,status,payment_status,total_amount,amount_paid,amount_refunded,net_amount,customer_name,customer_phone`
+
+
 
 ## Booking & Payment flow (tell the frontend developer)
 
