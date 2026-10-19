@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,16 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 720
     cors_origins: str = "*"
     timezone: str = "Asia/Kolkata"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return "postgresql+psycopg://" + v[len("postgres://"):]
+            if v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                return "postgresql+psycopg://" + v[len("postgresql://"):]
+        return v
 
     admin_email: str = "admin@example.com"
     admin_password: str = "admin12345"
