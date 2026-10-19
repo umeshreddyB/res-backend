@@ -18,6 +18,10 @@ def sign(order_id, payment_id, secret="test-secret"):
     return hmac.new(secret.encode(), f"{order_id}|{payment_id}".encode(), hashlib.sha256).hexdigest()
 
 
+def pickup_time_str():
+    return (datetime.now(timezone.utc) + timedelta(days=2)).replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
+
+
 def setup_menu_and_table(client, admin):
     cat = client.post("/admin/categories", json={"name": "Mains"}, headers=auth(admin)).json()
     item = client.post("/admin/items", json={"category_id": cat["id"], "name": "Paneer Butter Masala",
@@ -46,7 +50,8 @@ def test_menu_availability_toggle(client):
     client.patch(f"/admin/items/{item['id']}/availability", json={"is_available": False}, headers=auth(admin))
     assert client.get("/menu?only_available=true").json()[0]["items"] == []
     cust = register_customer(client)
-    r = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}]}, headers=auth(cust))
+    r = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
+                                     "pickup_time": pickup_time_str()}, headers=auth(cust))
     assert r.status_code == 409
 
 
@@ -70,7 +75,8 @@ def test_full_online_payment_flow(client):
     item = setup_menu_and_table(client, admin)
     cust = register_customer(client)
     r = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 2}],
-                                     "payment_option": "full_online"}, headers=auth(cust))
+                                     "payment_option": "full_online",
+                                     "pickup_time": pickup_time_str()}, headers=auth(cust))
     assert r.status_code == 201, r.text
     order = r.json()
     assert order["total"] == 500.0 and order["status"] == "pending_payment"
@@ -103,8 +109,18 @@ def test_advance_payment_and_webhook(client):
     admin = login(client, "admin@example.com", "admin12345")
     item = setup_menu_and_table(client, admin)
     cust = register_customer(client)
+    pickup = pickup_time_str()
+
+    # Customer cannot choose advance_online (rejected with 400)
+    bad = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 2}],
+                                       "payment_option": "advance_online",
+                                       "pickup_time": pickup}, headers=auth(cust))
+    assert bad.status_code == 400
+
+    # Admin flow can test advance payment calculation, webhook, and mark-paid
     order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 2}],
-                                         "payment_option": "advance_online"}, headers=auth(cust)).json()
+                                         "payment_option": "advance_online",
+                                         "pickup_time": pickup}, headers=auth(admin)).json()
     assert order["payment"]["amount"] == 250.0  # 50% of 500
     rz_id = order["payment"]["razorpay_order_id"]
 
@@ -114,7 +130,7 @@ def test_advance_payment_and_webhook(client):
     assert client.post("/payments/webhook", content=body, headers={"X-Razorpay-Signature": "bad"}).status_code == 400
     assert client.post("/payments/webhook", content=body, headers={"X-Razorpay-Signature": sig}).status_code == 200
 
-    got = client.get(f"/orders/{order['id']}", headers=auth(cust)).json()
+    got = client.get(f"/orders/{order['id']}", headers=auth(admin)).json()
     assert got["status"] == "placed" and got["payment_status"] == "partially_paid" and got["balance"] == 250.0
 
     paid = client.post(f"/admin/orders/{order['id']}/mark-paid", headers=auth(admin)).json()
@@ -125,8 +141,17 @@ def test_pay_at_pickup_goes_straight_to_placed(client):
     admin = login(client, "admin@example.com", "admin12345")
     item = setup_menu_and_table(client, admin)
     cust = register_customer(client)
+    pickup = pickup_time_str()
+
+    # Customer cannot choose pay_at_pickup (rejected with 400)
+    bad = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
+                                       "payment_option": "pay_at_pickup",
+                                       "pickup_time": pickup}, headers=auth(cust))
+    assert bad.status_code == 400
+
     order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
-                                         "payment_option": "pay_at_pickup"}, headers=auth(cust)).json()
+                                         "payment_option": "pay_at_pickup",
+                                         "pickup_time": pickup}, headers=auth(admin)).json()
     assert order["status"] == "placed" and order["payment"] is None
     # other customers cannot read this order
     other = register_customer(client, "other@example.com")
@@ -136,7 +161,8 @@ def test_pay_at_pickup_goes_straight_to_placed(client):
 def _create_paid_order(client, admin, cust, item):
     """Helper: create a full_online order and verify payment so it's paid."""
     order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 2}],
-                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+                                         "payment_option": "full_online",
+                                         "pickup_time": pickup_time_str()}, headers=auth(cust)).json()
     rz_id = order["payment"]["razorpay_order_id"]
     client.post("/payments/verify", json={"razorpay_order_id": rz_id, "razorpay_payment_id": "pay_r1",
                                           "razorpay_signature": sign(rz_id, "pay_r1")}, headers=auth(cust))
@@ -254,7 +280,8 @@ def test_abandoned_order_cleanup(client):
 
     # Create an order that stays in pending_payment
     order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
-                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+                                         "payment_option": "full_online",
+                                         "pickup_time": pickup_time_str()}, headers=auth(cust)).json()
     assert order["status"] == "pending_payment"
 
     # Running cleanup now should not cancel it (too recent)
@@ -283,7 +310,8 @@ def test_late_payment_for_cancelled_order(client):
     cust = register_customer(client)
 
     order = client.post("/orders", json={"items": [{"menu_item_id": item["id"], "quantity": 1}],
-                                         "payment_option": "full_online"}, headers=auth(cust)).json()
+                                         "payment_option": "full_online",
+                                         "pickup_time": pickup_time_str()}, headers=auth(cust)).json()
     rz_id = order["payment"]["razorpay_order_id"]
     oid = order["id"]
 

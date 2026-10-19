@@ -35,11 +35,15 @@ def setup_order(client, cust_token):
     }, headers=auth(admin)).json()
     prev = settings.petpooja_enabled
     settings.petpooja_enabled = False
+    from datetime import datetime, timedelta, timezone
+    pickup = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
     try:
         order = client.post("/orders", json={
             "items": [{"menu_item_id": item["id"], "quantity": 2}],
-            "payment_option": "pay_at_pickup"
-        }, headers=auth(cust_token)).json()
+            "payment_option": "pay_at_pickup",
+            "customer_name": "Cust",
+            "pickup_time": pickup,
+        }, headers=auth(admin)).json()
     finally:
         settings.petpooja_enabled = prev
     return order

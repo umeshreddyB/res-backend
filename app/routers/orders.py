@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
@@ -8,15 +8,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..core.config import settings
-from ..core.timeutils import day_range_utc
+from ..core.timeutils import day_range_utc, now_utc
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import (MenuItem, Order, OrderItem, OrderStatus, OrderType, Payment,
-                      PaymentOption, PaymentStatus, Refund, RefundStatus, Reservation, Role, User)
+from ..models import (DiningTable, MenuItem, Order, OrderItem, OrderStatus, OrderType, Payment,
+                      PaymentOption, PaymentStatus, Refund, RefundStatus, Reservation,
+                      ReservationSource, ReservationStatus, Role, TableChannel, User)
 from ..schemas import (OrderCreated, OrderIn, OrderOut, OrderStatusIn, OrderStatusResult,
                        PaymentInit, RefundIn, RefundOut)
 from ..services import petpooja, razorpay_service
+from ..services.booking import free_tables, lock_table, table_is_free
 from ..services.razorpay_service import to_paise
+from ..services.settings_service import (validate_pickup_time,
+                                         validate_reservation_slot)
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 admin_router = APIRouter(prefix="/admin/orders", tags=["admin: orders"], dependencies=[Depends(require_admin)])
@@ -35,6 +39,61 @@ TRANSITIONS = {
 @router.post("", response_model=OrderCreated, status_code=201)
 def create_order(data: OrderIn, background: BackgroundTasks,
                  user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role == Role.customer and data.order_type in (OrderType.takeaway, OrderType.dine_in):
+        if data.payment_option != PaymentOption.full_online:
+            raise HTTPException(400, f"Only full_online payment is accepted for {data.order_type.value} orders")
+
+    if data.order_type == OrderType.takeaway:
+        if not data.pickup_time:
+            raise HTTPException(400, "pickup_time is required for takeaway orders")
+        validate_pickup_time(db, data.pickup_time)
+
+    if data.order_type == OrderType.dine_in:
+        if not data.pickup_time:
+            raise HTTPException(400, "pickup_time is required for dine-in orders")
+        if not data.guests:
+            raise HTTPException(400, "guests is required for dine-in orders")
+
+        start, end = validate_reservation_slot(db, data.pickup_time, data.guests)
+
+        if data.table_id:
+            table = db.get(DiningTable, data.table_id)
+            if not table or not table.is_available:
+                raise HTTPException(404, "Table not found or not available")
+            if table.channel != TableChannel.own_app:
+                raise HTTPException(400, f"Table {table.number} is not available for online bookings")
+            if table.capacity < data.guests:
+                raise HTTPException(400, f"Table {table.number} seats {table.capacity}, party is {data.guests}")
+            candidates = [table]
+        else:
+            candidates = free_tables(db, start, end, data.guests, channel=TableChannel.own_app)
+
+        assigned_res = None
+        for t in candidates:
+            lock_table(db, t.id)
+            if table_is_free(db, t.id, start, end):
+                hold_exp = now_utc() + timedelta(minutes=settings.hold_minutes)
+                assigned_res = Reservation(
+                    user_id=user.id,
+                    table_id=t.id,
+                    guests=data.guests,
+                    start_time=start,
+                    end_time=end,
+                    status=ReservationStatus.held,
+                    source=ReservationSource.own_app,
+                    hold_expires_at=hold_exp,
+                    notes=data.notes,
+                )
+                db.add(assigned_res)
+                db.flush()
+                break
+            db.rollback()
+
+        if not assigned_res:
+            raise HTTPException(409, "No table is free for that time. Please choose another slot.")
+
+        data.reservation_id = assigned_res.id
+
     # merge duplicate lines
     qty: dict[int, int] = {}
     for line in data.items:
@@ -48,7 +107,7 @@ def create_order(data: OrderIn, background: BackgroundTasks,
     if sold_out:
         raise HTTPException(409, f"Currently unavailable: {', '.join(sold_out)}")
 
-    if data.reservation_id:
+    if data.reservation_id and data.order_type != OrderType.dine_in:
         res = db.get(Reservation, data.reservation_id)
         if not res or res.user_id != user.id:
             raise HTTPException(404, "Reservation not found")

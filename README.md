@@ -56,22 +56,23 @@ Tests: `pytest` (uses SQLite, no setup needed).
 |---|---|---|
 | Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` | public / logged in |
 | Menu | `GET /menu` (`?only_available=true`), `GET /menu/items/{id}` | public |
-| Menu admin | `POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability` | admin |
-| Tables | `GET /tables/availability?start_time=&guests=` | public |
-| Tables admin | `GET/POST/PATCH/DELETE /admin/tables` | admin |
+| Menu admin | `POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability`, `POST /admin/items/{id}/image` | admin |
+| Tables | `GET /tables/availability?start_time=&guests=` (own_app tables only) | public |
+| Tables admin | `GET/POST/PATCH/DELETE /admin/tables` (with channel: own_app, swiggy, walk_in) | admin |
 | Reservations | `POST /reservations`, `GET /reservations/me`, `POST /reservations/{id}/cancel` | customer |
-| Reservations admin | `GET /admin/reservations?date=&status=`, `PATCH /admin/reservations/{id}/status` | admin |
-| Orders | `POST /orders`, `GET /orders/me`, `GET /orders/{id}` | customer |
+| Reservations admin | `GET /admin/reservations?date=&status=`, `POST /admin/reservations` (manual booking/block), `PATCH /admin/reservations/{id}/status` | admin |
+| Orders | `POST /orders` (takeaway with pickup_time; dine_in creates atomic held table + order), `GET /orders/me`, `GET /orders/{id}` | customer |
 | Orders admin | `GET /admin/orders?status=&date=`, `PATCH /admin/orders/{id}/status`, `POST /admin/orders/{id}/mark-paid` | admin |
 | Payments | `POST /payments/verify`, `POST /payments/webhook` | customer / Razorpay |
 
-## Payment flow (tell the frontend developer)
+## Booking & Payment flow (tell the frontend developer)
 
-1. `POST /orders` with `payment_option`: `full_online`, `advance_online` (50%, set by `ADVANCE_PERCENT`) or `pay_at_pickup`.
-2. If online, the response has a `payment` object (`razorpay_order_id`, `key_id`, `amount_paise`). Open Razorpay Checkout with it.
-3. On success Razorpay gives `razorpay_payment_id` and `razorpay_signature`. Send those 3 values to `POST /payments/verify`.
-4. The order moves `pending_payment` -> `placed`. The server also confirms via webhook if the customer closes the browser.
-5. Prices are always calculated on the server. The frontend never sends amounts.
+1. **Takeaway Orders**: `POST /orders` with `order_type="takeaway"` requires `pickup_time` (future, within operating hours). Customers must use `payment_option="full_online"`.
+2. **Dine-In Orders**: `POST /orders` with `order_type="dine_in"` creates an atomic table hold and order. Requires `guests`, `pickup_time` (arrival time), and optional `table_id` (auto-assigns smallest free `own_app` table if omitted). Customers must use `payment_option="full_online"`. Creates a reservation with status `held` (`HOLD_MINUTES`, default 15 mins).
+3. If online, the response has a `payment` object (`razorpay_order_id`, `key_id`, `amount_paise`). Open Razorpay Checkout with it.
+4. On success Razorpay gives `razorpay_payment_id` and `razorpay_signature`. Send those 3 values to `POST /payments/verify`.
+5. For dine-in, verifying payment marks the order `placed` and the reservation `confirmed` in the same transaction. If unpaid before `hold_expires_at`, background cleanup cancels the order and releases the hold.
+6. Prices are always calculated on the server. The frontend never sends amounts.
 
 Dev mode: with `RAZORPAY_KEY_ID` empty, no real Razorpay call is made (mock order ids), so the frontend can
 be built before the client's Razorpay account is ready. Real keys: set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`,

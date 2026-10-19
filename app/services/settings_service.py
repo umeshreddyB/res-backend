@@ -194,3 +194,52 @@ def validate_reservation_slot(
         raise HTTPException(400, "Reservation time is outside restaurant operating hours")
 
     return start_utc, end_utc
+
+
+def validate_pickup_time(db: Session, pickup_time_raw: datetime) -> datetime:
+    """Validates that takeaway pickup_time is in the future, within max_days_ahead, and within restaurant operating hours."""
+    pickup_utc = to_utc(pickup_time_raw)
+    current_utc = now_utc()
+    if pickup_utc <= current_utc:
+        raise HTTPException(400, "Pickup time must be in the future")
+
+    settings = get_or_create_settings(db)
+    pickup_local = pickup_utc.astimezone(LOCAL_TZ)
+    now_local = current_utc.astimezone(LOCAL_TZ)
+
+    max_allowed_date = (now_local + timedelta(days=settings.max_days_ahead)).date()
+    if pickup_local.date() > max_allowed_date:
+        raise HTTPException(400, f"Orders can only be placed up to {settings.max_days_ahead} days in advance")
+
+    hours = get_operating_hours(db)
+    hours_by_day = {h.day_of_week: h for h in hours}
+
+    candidate_dates = [
+        pickup_local.date() - timedelta(days=1),
+        pickup_local.date(),
+    ]
+
+    time_valid = False
+    for shift_date in candidate_dates:
+        h = hours_by_day.get(shift_date.weekday())
+        if not h or h.is_closed or not h.open_time or not h.close_time:
+            continue
+
+        shift_open = datetime.combine(shift_date, h.open_time, tzinfo=LOCAL_TZ)
+        if h.close_time > h.open_time:
+            shift_close = datetime.combine(shift_date, h.close_time, tzinfo=LOCAL_TZ)
+        else:
+            shift_close = datetime.combine(shift_date + timedelta(days=1), h.close_time, tzinfo=LOCAL_TZ)
+
+        if shift_open <= pickup_local <= shift_close:
+            time_valid = True
+            break
+
+    if not time_valid:
+        h_today = hours_by_day.get(pickup_local.date().weekday())
+        if h_today and h_today.is_closed:
+            day_str = DAY_NAMES[pickup_local.date().weekday()]
+            raise HTTPException(400, f"Restaurant is closed on {day_str}s")
+        raise HTTPException(400, "Pickup time is outside restaurant operating hours")
+
+    return pickup_utc

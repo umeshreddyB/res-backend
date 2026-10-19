@@ -53,9 +53,11 @@ def test_user_cannot_read_other_users_orders(client):
     user_b = register_customer(client, "b@example.com")
 
     # User A creates an order
+    from datetime import datetime, timedelta, timezone
+    pickup = (datetime.now(timezone.utc) + timedelta(days=1)).replace(hour=14, minute=0, second=0, microsecond=0).isoformat()
     items = client.get("/menu").json()[0]["items"]
     order_a = client.post("/orders", json={"items": [{"menu_item_id": items[0]["id"], "quantity": 1}],
-                                            "payment_option": "pay_at_pickup"}, headers=auth(user_a)).json()
+                                            "payment_option": "full_online", "pickup_time": pickup}, headers=auth(user_a)).json()
 
     # User B cannot read User A's order
     assert client.get(f"/orders/{order_a['id']}", headers=auth(user_b)).status_code == 404

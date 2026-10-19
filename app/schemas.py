@@ -5,7 +5,8 @@ from typing import Annotated, Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, PlainSerializer
 
 from .models import (OrderStatus, OrderType, PaymentOption, PaymentStatus,
-                     RefundStatus, ReservationStatus, Role)
+                     RefundStatus, ReservationSource, ReservationStatus, Role,
+                     TableChannel)
 
 # money is returned to the frontend as a JSON number (e.g. 250.0), not a string
 Money = Annotated[Decimal, PlainSerializer(lambda v: float(v), return_type=float, when_used="json")]
@@ -115,12 +116,14 @@ class CategoryWithItems(CategoryOut):
 class TableIn(BaseModel):
     number: int = Field(ge=1)
     capacity: int = Field(ge=1, le=50)
+    channel: TableChannel = TableChannel.own_app
     is_available: bool = True
 
 
 class TableUpdate(BaseModel):
     number: Optional[int] = Field(default=None, ge=1)
     capacity: Optional[int] = Field(default=None, ge=1, le=50)
+    channel: Optional[TableChannel] = None
     is_available: Optional[bool] = None
 
 
@@ -128,6 +131,7 @@ class TableOut(ORM):
     id: int
     number: int
     capacity: int
+    channel: TableChannel
     is_available: bool
 
 
@@ -139,6 +143,16 @@ class ReservationIn(BaseModel):
     notes: Optional[str] = None
 
 
+class AdminReservationIn(BaseModel):
+    table_id: int
+    guests: int = Field(ge=1, le=50)
+    start_time: datetime
+    source: ReservationSource = ReservationSource.own_app
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class ReservationOut(ORM):
     id: int
     table_id: int
@@ -146,6 +160,10 @@ class ReservationOut(ORM):
     start_time: datetime
     end_time: datetime
     status: ReservationStatus
+    source: ReservationSource = ReservationSource.own_app
+    hold_expires_at: Optional[datetime] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     notes: Optional[str]
     created_at: datetime
     user: Optional[UserOut] = None
@@ -171,6 +189,8 @@ class OrderIn(BaseModel):
     notes: Optional[str] = None
     pickup_time: Optional[datetime] = None
     reservation_id: Optional[int] = None
+    guests: Optional[int] = None
+    table_id: Optional[int] = None
 
 
 class OrderItemOut(ORM):
@@ -196,6 +216,7 @@ class OrderOut(ORM):
     notes: Optional[str]
     pickup_time: Optional[datetime]
     reservation_id: Optional[int]
+    table_number: Optional[int] = None
     petpooja_order_id: Optional[str] = None
     petpooja_status: Optional[str] = None
     needs_attention: bool = False

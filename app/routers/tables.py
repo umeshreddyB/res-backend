@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
-from ..core.timeutils import to_utc
+from ..core.timeutils import now_utc, to_utc
 from ..db import get_db
 from ..deps import require_admin
 from ..models import DiningTable, Reservation, ReservationStatus
@@ -52,6 +52,19 @@ def update_table(table_id: int, data: TableUpdate, db: Session = Depends(get_db)
     if "number" in changes and changes["number"] != table.number and \
             db.scalar(select(DiningTable).where(DiningTable.number == changes["number"])):
         raise HTTPException(409, "Table number already exists")
+    if "channel" in changes and changes["channel"] != table.channel:
+        now = now_utc()
+        has_future_res = db.scalar(
+            select(Reservation.id)
+            .where(
+                Reservation.table_id == table_id,
+                Reservation.end_time > now,
+                Reservation.status.in_([ReservationStatus.confirmed, ReservationStatus.held]),
+            )
+            .limit(1)
+        )
+        if has_future_res:
+            raise HTTPException(409, "Cannot change table channel: table has future confirmed or held reservations. Please resolve them first.")
     for k, v in changes.items():
         setattr(table, k, v)
     db.commit()

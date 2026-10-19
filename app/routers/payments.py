@@ -28,7 +28,7 @@ def verify_payment(data: VerifyPaymentIn, background: BackgroundTasks,
     if not razorpay_service.verify_payment_signature(data.razorpay_order_id, data.razorpay_payment_id,
                                                      data.razorpay_signature):
         raise HTTPException(400, "Invalid payment signature")
-    applied = apply_payment_success(payment, data.razorpay_payment_id)
+    applied = apply_payment_success(payment, data.razorpay_payment_id, db=db)
     db.commit()
     order = db.scalar(select(Order).options(selectinload(Order.items)).where(Order.id == payment.order_id))
     if applied and order.status == OrderStatus.placed:
@@ -48,7 +48,7 @@ async def razorpay_webhook(request: Request, background: BackgroundTasks,
     if body.get("event") in ("payment.captured", "order.paid"):
         entity = body.get("payload", {}).get("payment", {}).get("entity", {})
         payment = _locked_payment(db, entity.get("order_id", ""))
-        if payment and apply_payment_success(payment, entity.get("id", "")):
+        if payment and apply_payment_success(payment, entity.get("id", ""), db=db):
             db.commit()
             if payment.order.status == OrderStatus.placed:
                 background.add_task(petpooja.push_order, payment.order_id)

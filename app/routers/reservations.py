@@ -9,8 +9,10 @@ from ..core.config import settings
 from ..core.timeutils import day_range_utc, now_utc, to_utc
 from ..db import get_db
 from ..deps import get_current_user, require_admin
-from ..models import DiningTable, Reservation, ReservationStatus, User
-from ..schemas import ReservationIn, ReservationOut, ReservationStatusIn
+from ..models import (DiningTable, Reservation, ReservationSource,
+                      ReservationStatus, TableChannel, User)
+from ..schemas import (AdminReservationIn, ReservationIn, ReservationOut,
+                       ReservationStatusIn)
 from ..services.booking import free_tables, lock_table, table_is_free
 from ..services.settings_service import validate_reservation_slot
 
@@ -29,17 +31,20 @@ def create_reservation(data: ReservationIn, user: User = Depends(get_current_use
         table = db.get(DiningTable, data.table_id)
         if not table or not table.is_available:
             raise HTTPException(404, "Table not found or not available")
+        if table.channel != TableChannel.own_app:
+            raise HTTPException(400, f"Table {table.number} is not available for online bookings")
         if table.capacity < data.guests:
             raise HTTPException(400, f"Table {table.number} seats {table.capacity}, party is {data.guests}")
         candidates = [table]
     else:
-        candidates = free_tables(db, start, end, data.guests)
+        candidates = free_tables(db, start, end, data.guests, channel=TableChannel.own_app)
 
     for t in candidates:
         lock_table(db, t.id)
         if table_is_free(db, t.id, start, end):
             res = Reservation(user_id=user.id, table_id=t.id, guests=data.guests,
-                              start_time=start, end_time=end, notes=data.notes)
+                              start_time=start, end_time=end, status=ReservationStatus.confirmed,
+                              source=ReservationSource.own_app, notes=data.notes)
             db.add(res)
             db.commit()
             return db.scalar(select(Reservation).options(*_load).where(Reservation.id == res.id))
@@ -90,3 +95,34 @@ def set_reservation_status(reservation_id: int, data: ReservationStatusIn, db: S
     res.status = data.status
     db.commit()
     return res
+
+
+@admin_router.post("", response_model=ReservationOut, status_code=201)
+def create_admin_reservation(data: AdminReservationIn, db: Session = Depends(get_db)):
+    start, end = validate_reservation_slot(db, data.start_time, data.guests)
+    table = db.get(DiningTable, data.table_id)
+    if not table or not table.is_available:
+        raise HTTPException(404, "Table not found or not available")
+    if table.capacity < data.guests:
+        raise HTTPException(400, f"Table {table.number} seats {table.capacity}, party is {data.guests}")
+
+    lock_table(db, table.id)
+    if not table_is_free(db, table.id, start, end):
+        db.rollback()
+        raise HTTPException(409, "Table is already booked for that time")
+
+    res = Reservation(
+        user_id=None,
+        table_id=table.id,
+        guests=data.guests,
+        start_time=start,
+        end_time=end,
+        status=ReservationStatus.confirmed,
+        source=data.source,
+        customer_name=data.customer_name,
+        customer_phone=data.customer_phone,
+        notes=data.notes,
+    )
+    db.add(res)
+    db.commit()
+    return db.scalar(select(Reservation).options(*_load).where(Reservation.id == res.id))

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     advance_percent: int = 50
     reservation_minutes: int = 90
+    hold_minutes: int = 15
+    reservation_deposit_enabled: bool = False
 
     razorpay_key_id: str = ""
     razorpay_key_secret: str = "dev-secret"

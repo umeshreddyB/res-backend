@@ -65,11 +65,26 @@ class RefundStatus(str, enum.Enum):
     failed = "failed"
 
 
+class TableChannel(str, enum.Enum):
+    own_app = "own_app"
+    swiggy = "swiggy"
+    walk_in = "walk_in"
+
+
+class ReservationSource(str, enum.Enum):
+    own_app = "own_app"
+    swiggy = "swiggy"
+    phone = "phone"
+    walk_in = "walk_in"
+    block = "block"
+
+
 class ReservationStatus(str, enum.Enum):
     confirmed = "confirmed"
     cancelled = "cancelled"
     completed = "completed"
     no_show = "no_show"
+    held = "held"
 
 
 class User(Base):
@@ -112,21 +127,26 @@ class DiningTable(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     number: Mapped[int] = mapped_column(Integer, unique=True)
     capacity: Mapped[int] = mapped_column(Integer)
+    channel: Mapped[TableChannel] = mapped_column(E(TableChannel), default=TableChannel.own_app)
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)  # admin switch (out of service etc.)
 
 
 class Reservation(Base):
     __tablename__ = "reservations"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     table_id: Mapped[int] = mapped_column(ForeignKey("dining_tables.id"), index=True)
     guests: Mapped[int] = mapped_column(Integer)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[ReservationStatus] = mapped_column(E(ReservationStatus), default=ReservationStatus.confirmed)
+    source: Mapped[ReservationSource] = mapped_column(E(ReservationSource), default=ReservationSource.own_app)
+    hold_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    customer_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    customer_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    user: Mapped[User] = relationship()
+    user: Mapped[Optional[User]] = relationship()
     table: Mapped[DiningTable] = relationship()
     __table_args__ = (Index("ix_res_table_time", "table_id", "start_time", "end_time"),)
 
@@ -157,7 +177,14 @@ class Order(Base):
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     payments: Mapped[list["Payment"]] = relationship(back_populates="order")
     refunds: Mapped[list["Refund"]] = relationship(back_populates="order")
+    reservation: Mapped[Optional[Reservation]] = relationship()
     user: Mapped[User] = relationship()
+
+    @property
+    def table_number(self) -> Optional[int]:
+        if self.reservation and self.reservation.table:
+            return self.reservation.table.number
+        return None
 
     @property
     def balance(self) -> Decimal:

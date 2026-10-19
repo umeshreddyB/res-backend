@@ -4,11 +4,11 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import DiningTable, Reservation, ReservationStatus
+from ..models import DiningTable, Reservation, ReservationStatus, TableChannel
 
 
 def _overlapping(start: datetime, end: datetime):
-    return (Reservation.status == ReservationStatus.confirmed,
+    return (Reservation.status.in_([ReservationStatus.confirmed, ReservationStatus.held]),
             Reservation.start_time < end,
             Reservation.end_time > start)
 
@@ -18,11 +18,14 @@ def table_is_free(db: Session, table_id: int, start: datetime, end: datetime) ->
     return db.scalar(q) is None
 
 
-def free_tables(db: Session, start: datetime, end: datetime, guests: int) -> list[DiningTable]:
+def free_tables(db: Session, start: datetime, end: datetime, guests: int,
+                channel: Optional[TableChannel] = TableChannel.own_app) -> list[DiningTable]:
     busy = select(Reservation.table_id).where(*_overlapping(start, end))
     q = (select(DiningTable)
-         .where(DiningTable.is_available.is_(True), DiningTable.capacity >= guests, DiningTable.id.not_in(busy))
-         .order_by(DiningTable.capacity, DiningTable.number))
+         .where(DiningTable.is_available.is_(True), DiningTable.capacity >= guests, DiningTable.id.not_in(busy)))
+    if channel is not None:
+        q = q.where(DiningTable.channel == channel)
+    q = q.order_by(DiningTable.capacity, DiningTable.number)
     return list(db.scalars(q))
 
 
