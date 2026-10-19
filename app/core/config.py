@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/restaurant"
     secret_key: str = "change-me"
     access_token_expire_minutes: int = 720
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    cors_origins: str = "*"
     timezone: str = "Asia/Kolkata"
 
     admin_email: str = "admin@example.com"

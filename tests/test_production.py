@@ -134,3 +134,26 @@ def test_get_client_ip_no_forwarded_header():
     }
     req = Request(scope)
     assert get_client_ip(req) == "198.51.100.99"
+
+
+def test_cors_allows_any_origin(client):
+    origin = "https://any-arbitrary-domain.com"
+
+    # Preflight OPTIONS
+    preflight = client.options(
+        "/health",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "Authorization,Content-Type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers.get("access-control-allow-origin") == origin
+    assert preflight.headers.get("access-control-allow-credentials") == "true"
+
+    # Simple GET
+    r = client.get("/health", headers={"Origin": origin})
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == origin
+    assert r.headers.get("access-control-allow-credentials") == "true"
