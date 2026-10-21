@@ -99,7 +99,7 @@ def set_reservation_status(reservation_id: int, data: ReservationStatusIn, db: S
 
 @admin_router.post("", response_model=ReservationOut, status_code=201)
 def create_admin_reservation(data: AdminReservationIn, db: Session = Depends(get_db)):
-    start, end = validate_reservation_slot(db, data.start_time, data.guests)
+    start, end = validate_reservation_slot(db, data.start_time, data.guests, admin=True)
     table = db.get(DiningTable, data.table_id)
     if not table or not table.is_available:
         raise HTTPException(404, "Table not found or not available")

@@ -119,6 +119,7 @@ def validate_reservation_slot(
     db: Session,
     start_time_raw: datetime,
     guests: int,
+    admin: bool = False,
 ) -> tuple[datetime, datetime]:
     """Validates reservation slot against rules, party size, days ahead, and operating hours.
 
@@ -137,17 +138,26 @@ def validate_reservation_slot(
     # 1. Party size
     if guests < 1:
         raise HTTPException(400, "Party size must be at least 1")
-    if guests > settings.max_party_size:
+    if not admin and guests > settings.max_party_size:
         raise HTTPException(400, f"Party size {guests} exceeds maximum of {settings.max_party_size}")
 
     # 2. Timing
     start_utc = to_utc(start_time_raw)
     current_utc = now_utc()
-    if start_utc <= current_utc:
-        raise HTTPException(400, "Reservation time must be in the future")
+    if admin:
+        if start_utc < current_utc - timedelta(hours=12):
+            raise HTTPException(400, "Reservation time cannot be more than 12 hours in the past")
+    else:
+        if start_utc <= current_utc:
+            raise HTTPException(400, "Reservation time must be in the future")
 
     duration = settings.reservation_duration_minutes
     end_utc = start_utc + timedelta(minutes=duration)
+
+    if admin:
+        # Admin manual bookings allow any time in the future and up to 12h in the past,
+        # skipping opening hours, buffers, and max-days-ahead checks.
+        return start_utc, end_utc
 
     # Convert to restaurant local time for calendar & opening hours checking
     res_start_local = start_utc.astimezone(LOCAL_TZ)

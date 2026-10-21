@@ -396,3 +396,123 @@ def test_changing_table_channel_with_future_bookings_rejected(client):
     patch_res = client.patch(f"/admin/tables/{t['id']}", json={"channel": "swiggy"}, headers=auth(admin))
     assert patch_res.status_code == 409
     assert "Cannot change table channel" in patch_res.json()["detail"]
+
+
+def test_admin_booking_now_succeeds_and_blocks_availability(client):
+    """Admin can book 'now' (or within 12h past for walk-in/counter), blocking table availability."""
+    from app.core.timeutils import LOCAL_TZ
+
+    admin = login(client, "admin@example.com", "admin12345")
+    t = client.post("/admin/tables", json={"number": 51, "capacity": 4, "channel": "own_app"}, headers=auth(admin)).json()
+
+    # Admin books a slot 5 minutes ahead (or right now)
+    target_dt = (datetime.now(LOCAL_TZ) + timedelta(minutes=5)).replace(microsecond=0)
+    target_iso = target_dt.isoformat()
+
+    r_admin = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": target_iso,
+        "source": "walk_in",
+        "customer_name": "Walk-in Guest",
+    }, headers=auth(admin))
+    assert r_admin.status_code == 201, r_admin.text
+    res = r_admin.json()
+    assert res["status"] == "confirmed"
+
+    # Availability for this slot or overlapping slot shows table 51 is blocked
+    # Check if target is in operating hours, table 51 must not be returned
+    r_avail = client.get(f"/tables/availability?start_time={target_iso}&guests=2")
+    if r_avail.status_code == 200:
+        table_ids = [tbl["id"] for tbl in r_avail.json()]
+        assert t["id"] not in table_ids, "Booked table must be blocked in availability"
+
+    # Overlapping admin booking on same table returns 409
+    r_overlap = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": target_iso,
+        "source": "phone",
+    }, headers=auth(admin))
+    assert r_overlap.status_code == 409
+
+
+def test_admin_booking_outside_opening_hours_succeeds_customer_rejected_and_overlap_409(client):
+    """Admin manual bookings skip operating-hours checks; customer bookings for same slot are rejected; overlap returns 409."""
+    from app.core.timeutils import LOCAL_TZ
+
+    admin = login(client, "admin@example.com", "admin12345")
+    t = client.post("/admin/tables", json={"number": 52, "capacity": 4, "channel": "own_app"}, headers=auth(admin)).json()
+    cust = register_customer(client, "outside_hours_cust@example.com")
+
+    # Pick 03:30 AM local time 2 days from now (restaurant hours are 11:00 to 23:00)
+    future_date = (datetime.now(LOCAL_TZ) + timedelta(days=2)).date()
+    outside_hours_local = datetime(future_date.year, future_date.month, future_date.day, 3, 30, tzinfo=LOCAL_TZ)
+    outside_hours_iso = outside_hours_local.isoformat()
+
+    # 1. Customer attempts to book outside opening hours -> rejected with 400
+    r_cust = client.post("/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": outside_hours_iso,
+    }, headers=auth(cust))
+    assert r_cust.status_code == 400
+    assert "operating hours" in r_cust.text.lower() or "closed" in r_cust.text.lower()
+
+    # 2. Admin books that exact same slot outside opening hours -> succeeds (201)
+    r_admin = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": outside_hours_iso,
+        "source": "phone",
+        "customer_name": "VIP Midnight Party",
+    }, headers=auth(admin))
+    assert r_admin.status_code == 201, r_admin.text
+    assert r_admin.json()["status"] == "confirmed"
+
+    # 3. Overlap on that table returns 409
+    r_overlap = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": outside_hours_iso,
+        "source": "walk_in",
+    }, headers=auth(admin))
+    assert r_overlap.status_code == 409
+
+
+def test_admin_booking_past_limits(client):
+    """Admin can book up to 12 hours in the past; >12h past is rejected; customer cannot book past."""
+    admin = login(client, "admin@example.com", "admin12345")
+    t = client.post("/admin/tables", json={"number": 53, "capacity": 4, "channel": "own_app"}, headers=auth(admin)).json()
+    cust = register_customer(client, "past_limit_cust@example.com")
+
+    now = datetime.now(timezone.utc)
+    two_hours_ago = (now - timedelta(hours=2)).isoformat()
+    thirteen_hours_ago = (now - timedelta(hours=13)).isoformat()
+
+    # Customer booking past -> 400
+    r_cust = client.post("/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": two_hours_ago,
+    }, headers=auth(cust))
+    assert r_cust.status_code == 400
+    assert "future" in r_cust.text.lower()
+
+    # Admin booking >12h ago -> 400
+    r_too_old = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": thirteen_hours_ago,
+    }, headers=auth(admin))
+    assert r_too_old.status_code == 400
+    assert "12 hours" in r_too_old.text.lower()
+
+    # Admin booking 2h ago -> succeeds 201
+    r_ok = client.post("/admin/reservations", json={
+        "table_id": t["id"],
+        "guests": 2,
+        "start_time": two_hours_ago,
+        "source": "phone",
+    }, headers=auth(admin))
+    assert r_ok.status_code == 201
