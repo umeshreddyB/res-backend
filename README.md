@@ -436,3 +436,75 @@ curl -i https://api.your-restaurant.com/health
 ```
 *(Returns `{"status": "ok", "database": "ok", "request_id": "..."}`)*
 
+---
+
+## Deploy on Render + Supabase
+
+This section covers deploying the backend as a cloud service on **Render** paired with a managed PostgreSQL database on **Supabase**.
+
+### 1. Region Selection
+Select **Singapore (ap-southeast-1)** for both Render and Supabase. Keeping both services in the same geographic region minimizes network latency for queries and transactions.
+
+### 2. Supabase Setup & Session Pooler URL
+1. Create a new project in [Supabase](https://supabase.com) in the **Singapore** region.
+2. In your Supabase Project Settings navigate to **Database** -> **Connection string** -> select **Session pooler** (IPv4 compatible):
+   - **Port**: `5432`
+   - **Username**: `postgres.<project-ref>` (e.g., `postgres.abcdefghijklmnop`)
+   - Prepend `postgresql+psycopg://` to the URL:
+     ```text
+     postgresql+psycopg://postgres.<project-ref>:[YOUR-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
+     ```
+   *(Note: The backend automatically converts `postgres://` or `postgresql://` prefixes to `postgresql+psycopg://` if needed).*
+
+3. **Enable Row Level Security (RLS) on all tables:**
+   Run the following in the Supabase SQL Editor so that direct client access or public anon keys cannot bypass backend validation:
+   ```sql
+   ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE menu_items ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE dining_tables ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE refunds ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE operating_hours ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE restaurant_settings ENABLE ROW LEVEL SECURITY;
+   ```
+
+### 3. Render Web Service Configuration
+1. In [Render](https://render.com), click **New +** -> **Web Service** and connect your GitHub repository (`https://github.com/umeshreddyB/res-backend.git`).
+2. Configure the following service settings:
+   - **Name**: `restaurant-api`
+   - **Region**: `Singapore`
+   - **Runtime**: `Python 3`
+   - **Build Command**:
+     ```bash
+     pip install -r requirements.txt
+     ```
+   - **Start Command**:
+     ```bash
+     alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+     ```
+     *(This runs all pending database migrations before starting the Uvicorn web server on Render's assigned `$PORT`).*
+
+### 4. Environment Variables on Render
+Under the **Environment** tab of your Render Web Service, configure:
+
+| Key | Example / Description |
+|---|---|
+| `DATABASE_URL` | `postgresql+psycopg://postgres.<ref>:[PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres` |
+| `ENV` | `prod` |
+| `SECRET_KEY` | Strong random string, at least 32 characters (`openssl rand -hex 32`) |
+| `ADMIN_EMAIL` | `admin@your-restaurant.com` |
+| `ADMIN_PASSWORD` | Strong password for initial admin account |
+| `CORS_ORIGINS` | `*` (or your frontend domain e.g. `https://your-restaurant.vercel.app`) |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` (or your reverse proxy IPs) |
+| `RAZORPAY_KEY_ID` | Your Razorpay Key ID (leave empty for mock mode) |
+| `RAZORPAY_KEY_SECRET` | Your Razorpay Secret (e.g. `test-secret` or live secret) |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook signing secret configured in Razorpay dashboard |
+| `TIMEZONE` | `Asia/Kolkata` |
+
+### 5. Free Tier Inactivity Notice
+> [!NOTE]
+> If deploying on Render's free tier, the web service automatically spins down (sleeps) after 15 minutes of inactivity. When a new request arrives, a cold start takes approximately 30–60 seconds while the container boots up. For live restaurant production use, the Starter plan ($7/mo) keeps the service permanently awake.
+
