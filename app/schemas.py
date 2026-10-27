@@ -176,11 +176,13 @@ class ReservationStatusIn(BaseModel):
 
 # ---------- orders ----------
 class OrderItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     menu_item_id: int
     quantity: int = Field(ge=1, le=50)
 
 
 class OrderIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     order_type: OrderType = OrderType.takeaway
     items: list[OrderItemIn] = Field(min_length=1)
     payment_option: PaymentOption = PaymentOption.full_online
