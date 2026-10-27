@@ -16,10 +16,10 @@ MAX_ROWS = 2000
 REQUIRED_FIELDS = ["category", "name", "price", "is_veg"]
 
 HEADER_ALIASES = {
-    "category": {"category", "category_name", "category name", "cat"},
+    "category": {"category", "category_name", "category name", "cat", "category_title"},
     "name": {"name", "item_name", "item name", "dish", "dish_name", "dish name", "item"},
-    "price": {"price", "cost", "rate", "amount"},
-    "is_veg": {"is_veg", "veg", "vegetarian", "is_vegetarian", "veg_non_veg", "veg/non-veg", "veg_or_non_veg"},
+    "price": {"price", "cost", "rate", "amount", "price (inr)", "price(inr)", "price inr", "price_inr", "price (rs)", "price(rs)", "price rs"},
+    "is_veg": {"is_veg", "veg", "vegetarian", "is_vegetarian", "veg_non_veg", "veg/non-veg", "veg_or_non_veg", "type"},
     "description": {"description", "desc", "details"},
     "is_available": {"is_available", "available", "availability", "in_stock"},
     "image_url": {"image_url", "image", "photo", "img"},
