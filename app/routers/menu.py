@@ -1,12 +1,12 @@
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from ..core.config import settings
 from ..db import get_db
 from ..deps import require_admin
-from ..models import Category, MenuItem
+from ..models import Category, MenuItem, OrderItem
 from ..schemas import (AvailabilityIn, CategoryIn, CategoryOut, CategoryUpdate,
                        CategoryWithItems, ItemIn, ItemOut, ItemUpdate, MenuImportReport)
 from ..services.menu_import import export_menu_csv, import_menu_csv
@@ -38,6 +38,11 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 
 
 # ---------------- admin ----------------
+@admin_router.get("/categories", response_model=list[CategoryOut])
+def list_categories(db: Session = Depends(get_db)):
+    return db.scalars(select(Category).order_by(Category.sort_order, Category.name)).all()
+
+
 @admin_router.post("/categories", response_model=CategoryOut, status_code=201)
 def create_category(data: CategoryIn, db: Session = Depends(get_db)):
     if db.scalar(select(Category).where(Category.name == data.name)):
@@ -64,6 +69,12 @@ def delete_category(category_id: int, db: Session = Depends(get_db)):
     cat = db.get(Category, category_id)
     if not cat:
         raise HTTPException(404, "Category not found")
+    item_ids = db.scalars(select(MenuItem.id).where(MenuItem.category_id == category_id)).all()
+    if item_ids:
+        db.execute(update(OrderItem).where(OrderItem.menu_item_id.in_(item_ids)).values(menu_item_id=None))
+        for item in cat.items:
+            if item.image_url:
+                storage.delete(item.image_url)
     db.delete(cat)  # also deletes its items; past orders keep their item-name snapshots
     db.commit()
 
@@ -110,6 +121,7 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Item not found")
     if item.image_url:
         storage.delete(item.image_url)
+    db.execute(update(OrderItem).where(OrderItem.menu_item_id == item_id).values(menu_item_id=None))
     db.delete(item)
     db.commit()
 

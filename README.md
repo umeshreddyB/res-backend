@@ -56,7 +56,7 @@ Tests: `pytest` (uses SQLite, no setup needed).
 |---|---|---|
 | Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` | public / logged in |
 | Menu | `GET /menu` (`?only_available=true`), `GET /menu/items/{id}` | public |
-| Menu admin | `POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability`, `POST /admin/items/{id}/image`, `POST /admin/menu/import`, `GET /admin/menu/export.csv` | admin |
+| Menu admin | `GET/POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability`, `POST/DELETE /admin/items/{id}/image`, `POST /admin/menu/import`, `GET /admin/menu/export.csv` | admin |
 | Tables | `GET /tables/availability?start_time=&guests=` (own_app tables only) | public |
 | Tables admin | `GET/POST/PATCH/DELETE /admin/tables` (with channel: own_app, swiggy, walk_in) | admin |
 | Reservations | `POST /reservations`, `GET /reservations/me`, `POST /reservations/{id}/cancel` | customer |
