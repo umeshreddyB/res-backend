@@ -210,6 +210,41 @@ The backend provides complete CSV-based menu synchronization to load, update, an
 #### 3. Sample CSV Template
 A reference starter template is provided at the repository root: `menu_template.csv`.
 
+#### 4. Safe Procedure to Clean Up Test Data & Load Real Menu
+To transition from development/test items to the client's actual production menu without data loss:
+
+1. **Step 1: Take a Supabase Backup or Export**
+   - In your [Supabase Dashboard](https://supabase.com/dashboard), navigate to **Project Settings** -> **Database** -> **Backups** and create a manual snapshot / note the daily backup.
+   - Alternatively, download the current database menu state as a backup CSV:
+     ```bash
+     curl -s -H "Authorization: Bearer <ADMIN_TOKEN>" \
+       https://<your-render-domain>/admin/menu/export.csv > pre_cleanup_menu_backup.csv
+     ```
+2. **Step 2: Preview the Replacement (`dry_run=true`, `mode=replace`)**
+   - Upload the client's final `menu.csv` file with `dry_run=true` and `mode=replace`:
+     ```bash
+     curl -X POST "https://<your-render-domain>/admin/menu/import?dry_run=true&mode=replace" \
+       -H "Authorization: Bearer <ADMIN_TOKEN>" \
+       -F "file=@client_menu.csv"
+     ```
+   - Inspect the returned report:
+     - Verify `errors: []` is empty.
+     - Verify `categories_deleted` and `items_deleted` match the number of old test records.
+     - Verify `categories_created` and `items_created` match the new client catalog.
+     - Note that `committed: false` confirms zero changes were applied during preview.
+3. **Step 3: Execute the Live Import (`dry_run=false`, `mode=replace`)**
+   - Once the counts and categories look correct, run the live import:
+     ```bash
+     curl -X POST "https://<your-render-domain>/admin/menu/import?dry_run=false&mode=replace" \
+       -H "Authorization: Bearer <ADMIN_TOKEN>" \
+       -F "file=@client_menu.csv"
+     ```
+   - All old test items and categories are deleted, and new client items are populated atomically.
+   - Any historical test orders keep their saved item names and prices intact (`OrderItem.unit_price` and `OrderItem.name` snapshots are preserved; `menu_item_id` foreign keys are set to `NULL` so old orders remain readable).
+4. **Step 4: Verify**
+   - Query `GET /menu` to verify the public catalog is updated and live.
+   - Download `GET /admin/menu/export.csv` to keep an immediate baseline copy of the production catalog.
+
 
 
 
