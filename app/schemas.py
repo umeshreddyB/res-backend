@@ -112,6 +112,26 @@ class CategoryWithItems(CategoryOut):
     items: list[ItemOut]
 
 
+class MenuImportRowError(BaseModel):
+    row: int
+    field: str
+    message: str
+
+
+class MenuImportReport(BaseModel):
+    dry_run: bool
+    mode: str
+    committed: bool
+    rows_read: int
+    categories_created: int
+    items_created: int
+    items_updated: int
+    items_unchanged: int
+    items_deleted: int
+    categories_deleted: int
+    errors: list[MenuImportRowError]
+
+
 # ---------- tables ----------
 class TableIn(BaseModel):
     number: int = Field(ge=1)

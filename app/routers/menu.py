@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -8,7 +8,8 @@ from ..db import get_db
 from ..deps import require_admin
 from ..models import Category, MenuItem
 from ..schemas import (AvailabilityIn, CategoryIn, CategoryOut, CategoryUpdate,
-                       CategoryWithItems, ItemIn, ItemOut, ItemUpdate)
+                       CategoryWithItems, ItemIn, ItemOut, ItemUpdate, MenuImportReport)
+from ..services.menu_import import export_menu_csv, import_menu_csv
 from ..services.storage import detect_image_type, storage
 
 router = APIRouter(prefix="/menu", tags=["menu"])
@@ -156,4 +157,33 @@ def delete_item_image(item_id: int, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(item)
     return item
+
+
+@admin_router.post("/menu/import", response_model=MenuImportReport)
+async def import_menu(
+    file: UploadFile = File(...),
+    dry_run: bool = Query(True, description="When true, validates and previews changes without saving"),
+    mode: str = Query("merge", pattern="^(merge|replace)$", description="Import mode: merge or replace"),
+    db: Session = Depends(get_db),
+):
+    """Import menu categories and items from a CSV file.
+
+    Query parameters:
+    - dry_run (default: true): Preview counts and validate without saving.
+    - mode (default: merge): 'merge' adds/updates items; 'replace' also deletes items/categories not present in the CSV.
+    """
+    content = await file.read()
+    return import_menu_csv(db, content, dry_run=dry_run, mode=mode)
+
+
+@admin_router.get("/menu/export.csv")
+def export_menu(db: Session = Depends(get_db)):
+    """Download current menu as a CSV file matching the import format."""
+    csv_data = export_menu_csv(db)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="menu_export.csv"'},
+    )
+
 

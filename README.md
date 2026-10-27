@@ -56,7 +56,7 @@ Tests: `pytest` (uses SQLite, no setup needed).
 |---|---|---|
 | Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` | public / logged in |
 | Menu | `GET /menu` (`?only_available=true`), `GET /menu/items/{id}` | public |
-| Menu admin | `POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability`, `POST /admin/items/{id}/image` | admin |
+| Menu admin | `POST/PATCH/DELETE /admin/categories`, `POST/PATCH/DELETE /admin/items`, `PATCH /admin/items/{id}/availability`, `POST /admin/items/{id}/image`, `POST /admin/menu/import`, `GET /admin/menu/export.csv` | admin |
 | Tables | `GET /tables/availability?start_time=&guests=` (own_app tables only) | public |
 | Tables admin | `GET/POST/PATCH/DELETE /admin/tables` (with channel: own_app, swiggy, walk_in) | admin |
 | Reservations | `POST /reservations`, `GET /reservations/me`, `POST /reservations/{id}/cancel` | customer |
@@ -130,6 +130,87 @@ All report endpoints accept optional `from` and `to` query parameters in ISO for
    Direct CSV file download (`Content-Type: text/csv; Content-Disposition: attachment; filename="orders_YYYY-MM-DD_YYYY-MM-DD.csv"`) with formula injection protection (values starting with `=`, `+`, `-`, or `@` are safely prefixed with a quote):
    Columns:
    `order_id,created_at,order_type,table_number,status,payment_status,total_amount,amount_paid,amount_refunded,net_amount,customer_name,customer_phone`
+
+### CSV Menu Import & Export (Admin)
+
+The backend provides complete CSV-based menu synchronization to load, update, and manage the menu catalog.
+
+#### 1. Import Endpoint (`POST /admin/menu/import?dry_run=true&mode=merge`)
+- **Authentication**: Requires Admin JWT (`Authorization: Bearer <token>`).
+- **Content-Type**: `multipart/form-data` with form field `file`.
+- **Query Parameters**:
+  - `dry_run` (boolean, default: `true`): When `true`, validates and parses the file, checks categories and items against the database, and returns the preview report without saving any database changes. Set `dry_run=false` to execute the database transaction.
+  - `mode` (string, `merge` or `replace`, default: `merge`):
+    - `merge`: Inserts new categories and items, updates existing items' `price`, `is_veg`, and `is_available`. Blank `description` or `image_url` cells retain their existing database values.
+    - `replace`: Performs `merge` actions, and additionally deletes categories and menu items not present in the CSV file. Existing orders retain their historical snapshot prices and item names (foreign keys are gracefully detached to `NULL`). To protect against accidental menu deletion, `replace` mode is refused if the file has 0 valid rows.
+- **File & Encoding Limits**:
+  - Maximum file size: **1 MB**.
+  - Maximum row count: **2000 rows**.
+  - Encodings accepted: UTF-8 and UTF-8 with BOM (typical Microsoft Excel export). Non-UTF8 encodings are rejected with an explicit error.
+  - Delimiters auto-detected: comma (`,`), semicolon (`;`), tab (`\t`).
+  - Spreadsheet formula injection protection: Cells beginning with `=`, `+`, `-`, or `@` are safely stripped of leading single quotes upon import and prefixed with a single quote upon export.
+- **CSV Headers & Required Fields**:
+  - Headers are case-insensitive and support aliases.
+  - **Required**:
+    - `category` (aliases: `category_name`, `cat`)
+    - `name` (aliases: `item_name`, `item`, `dish`)
+    - `price` (aliases: `rate`, `amount`, `cost`): Strips `₹`, `Rs`, `INR`, thousands commas. Must be positive, numeric, and have at most 2 decimal places.
+    - `is_veg` (aliases: `veg`, `vegetarian`, `isveg`): Explicitly required to prevent accidental labelling. Accepts `yes/no`, `true/false`, `1/0`, `veg/non-veg`.
+  - **Optional**:
+    - `description` (aliases: `desc`)
+    - `is_available` (aliases: `available`, `in_stock`, `status`): Defaults to `true` if omitted or empty.
+    - `image_url` (aliases: `image`, `photo`, `img`)
+- **All-or-Nothing Guarantee**:
+  - If any row fails validation (e.g., negative price, invalid boolean, missing required field, duplicate category + name row), **zero** changes are applied to the database even if `dry_run=false`.
+- **Response Shape (`MenuImportReport`)**:
+  ```json
+  {
+    "dry_run": false,
+    "mode": "merge",
+    "committed": true,
+    "rows_read": 15,
+    "categories_created": 2,
+    "items_created": 10,
+    "items_updated": 5,
+    "items_unchanged": 0,
+    "items_deleted": 0,
+    "categories_deleted": 0,
+    "errors": []
+  }
+  ```
+  If errors exist:
+  ```json
+  {
+    "dry_run": true,
+    "mode": "merge",
+    "committed": false,
+    "rows_read": 3,
+    "categories_created": 0,
+    "items_created": 0,
+    "items_updated": 0,
+    "items_unchanged": 0,
+    "items_deleted": 0,
+    "categories_deleted": 0,
+    "errors": [
+      {
+        "row": 2,
+        "field": "price",
+        "message": "Invalid price 'abc'. Price must be a positive number with at most 2 decimal places."
+      }
+    ]
+  }
+  ```
+
+#### 2. Export Endpoint (`GET /admin/menu/export.csv`)
+- **Authentication**: Requires Admin JWT (`Authorization: Bearer <token>`).
+- **Response**: CSV attachment (`Content-Type: text/csv; Content-Disposition: attachment; filename="menu_export_YYYY-MM-DD.csv"`).
+- Exact columns exported: `category,name,price,is_veg,description,is_available,image_url`.
+- **Round-Trip Guarantee**: Re-importing this export CSV produces `items_created=0`, `items_updated=0`, `items_unchanged=N` with 0 errors.
+
+#### 3. Sample CSV Template
+A reference starter template is provided at the repository root: `menu_template.csv`.
+
+
 
 
 
